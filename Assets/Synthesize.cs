@@ -1,10 +1,10 @@
 using UnityEngine;
-using UnityEngine.UI;
+using System.Collections;
 using System.Collections.Generic;
 using System.IO;
-using System.Linq;
 using TMPro;
-using UnityEngine.Rendering;
+using UnityEditor;
+using System.Linq; // Added for Concat
 
 public class Synthesize : MonoBehaviour
 {
@@ -12,103 +12,92 @@ public class Synthesize : MonoBehaviour
     public GameObject cardModel;
     public Material frontMaterial;
     
-    [Header("Lighting Settings")]
-    public bool setupLighting = true;
-    public float mainLightIntensity = 0.3f;
-    public float fillLightIntensity = 0.1f;
-    public float emissionIntensity = 0.0f;
-    public Color mainLightColor = Color.white;
-    public Color fillLightColor = new Color(0.8f, 0.8f, 1.0f); // Slight blue tint for fill
-    public float exposure = 0.5f;
-    [Range(0.1f, 2.0f)] public float exposureRange = 1.0f;
-    
-    [Header("Camera Setup")]
-    public Camera renderCamera;
-    public Transform cameraTransform;
+    [Header("Camera")]
+    Camera mainCamera;
     
     [Header("Asset Folders")]
-    public string frontImagesFolder = "Assets/FrontImages/";
-    public string chipImagesFolder = "Assets/ChipImages/";
-    public string logoImagesFolder = "Assets/LogoImages/";
-    public string bankLogoImagesFolder = "Assets/BankLogoImages/";
-    public string skyboxImagesFolder = "Assets/SkyboxImages/";
-    public string fontsFolder = "Assets/Fonts/";
+    string frontImagesFolder = "Assets/FrontImages/";
+    string chipImagesFolder = "Assets/ChipImages/";
+    string logoImagesFolder = "Assets/LogoImages/";
+    string bankLogoImagesFolder = "Assets/BankLogoImages/";
+    string skyboxImagesFolder = "Assets/SkyboxImages/";
+    string cardFontsFolder = "Assets/Card Fonts/";
     
-    int imageWidth = 1024;
-    int imageHeight = 1024;
-    int imagesToGenerate = 10;
+    [Header("Generation Settings")]
+    int numberOfImages = 10;
+    bool useRandomSkybox = true;
+    bool useChromeReflection = true;
     
     [Header("Randomization")]
-    [Range(0f, 1f)] public float minColorBlend = 0.2f;
-    [Range(0f, 1f)] public float maxColorBlend = 0.8f;
-    [Range(0f, 15f)] public float maxRotationAngle = 2.5f;
-    
-    public string[] cardBrands = { "Visa", "Mastercard", "American Express", "Discover" };
-    public string[] cardTypes = { "Credit", "Debit", "Prepaid" };
-    
-    [Header("Text Generation")]
-    public CreditCardTextGenerator textGenerator;
-    public bool textOnFront = true;
-    public float textOnFrontProbability = 0.7f;
-    
-    [Header("Logo Placement")]
+    float minCardRotation = -5f;
+    float maxCardRotation = 5f;
+    float minColorBlend = 0.0f;
+    float maxColorBlend = 0.4f;
     float chipOpacity = 1.0f;
     float brandLogoOpacity = 1.0f;
     float bankLogoOpacity = 1.0f;
+    float generationDelay = 0.1f;
     
-    // EMV chip positioning based on real-world specifications
-    // Card: 3.37" x 2.125", Chip: 0.85" x 0.71"
-    // Chip position from left edge: 0.34", from top edge: 0.46"
-    // Converting to center-based coordinates (0,0 at card center)
-    public Vector2 chipPosition = new Vector2(-0.4f, 0.0f); // Calculated from specs
+    bool pauseOnFocusLoss = false;
+    bool continuousGeneration = true;
+    float memoryCleanupInterval = 10f;
+    float chromeReflectionIntensity = 0.5f;
     
-    [Header("Logo Padding")]
-    float logoPadding = 0.04f; // Padding from chip edges
+    [Header("Card Dimensions")]
+   
+    [Header("Logo Positioning")]
+    Vector2 chipPosition = new Vector2(-0.44f, -0.18f); // Based on real EMV specs: 3/8" from left, 11/16" from top
+    Vector2 brandLogoPosition = new Vector2(0.5f, -0.5f);
+    Vector2 bankLogoPosition = new Vector2(0.5f, 0.5f);
+    float chipSize = 0.14f; // Based on real EMV specs: 0.4591" x 0.3692" (using width as reference)
+    float brandLogoSize = 0.2f;
+    float bankLogoSize = 0.15f;
+    float logoPadding = 0.05f;
     
-    public Vector2 brandLogoPosition = new Vector2(0.4f, 0.2f);
-    public Vector2 bankLogoPosition = new Vector2(0.4f, 0.4f);
+    [Header("Text Setup")]
+    public GameObject textSetup;
     
-    float chipSizeRatio = 0.15f; // Percentage of card width
-    float brandLogoSizeRatio = 0.2f; // Percentage of card width
-    float bankLogoSizeRatio = 0.1f; // Percentage of card width
+    [Header("Card Colors")]
+    List<Color> cardColors = new List<Color>
+    {
+        Color.white,
+        Color.black,
+        Color.gray,
+        Color.blue,
+        Color.red,
+        Color.green,
+        Color.yellow,
+        Color.cyan,
+        Color.magenta
+    };
     
-    [Header("Magnetic Stripe")]
-    public bool useMagneticStripe = true;
-    [Range(0f, 1f)] public float magneticStripeProbability = 0.3f;
-    public MagneticStripeGenerator magneticStripeGenerator = null;
+    [Header("Text Colors")]
+    List<Color> textColorOptions = new List<Color>
+    {
+        Color.white,
+        Color.black
+    };
     
-    [Header("Card Scaling")]
-    public bool useStandardCardDimensions = true;
-    public float cardWidthInches = 3.375f;
-    public float cardHeightInches = 2.125f;
-    public float cardThicknessInches = 0.03f;
-    
-    [Header("Skybox Settings")]
-    public bool useRandomSkybox = true;
-    [Range(0f, 360f)] public float maxSkyboxRotation = 360f;
-    public UnityEngine.Rendering.VolumeProfile defaultVolumeProfile;
-    
-    private RenderTexture renderTexture;
-    private Texture2D captureTexture;
+    // Private variables
     private List<Texture2D> frontTextures = new List<Texture2D>();
     private List<Texture2D> chipTextures = new List<Texture2D>();
     private List<Texture2D> logoTextures = new List<Texture2D>();
     private List<Texture2D> bankLogoTextures = new List<Texture2D>();
-    private List<Texture2D> skyboxTextures = new List<Texture2D>();
     private List<Cubemap> skyboxCubemaps = new List<Cubemap>();
-    private List<Font> availableFonts = new List<Font>();
-    private List<Color> cardColors = new List<Color>();
-    
-    // Performance optimization: Texture pooling
+    private List<TMPro.TMP_FontAsset> availableFonts = new List<TMPro.TMP_FontAsset>();
+    private List<TMPro.TMP_FontAsset> cardFonts = new List<TMPro.TMP_FontAsset>();
+    private RenderTexture renderTexture;
+    private Texture2D captureTexture;
+    private Texture2D signatureTexture;
+    private bool isGenerating = false;
+    private int currentImageCount = 0;
+    private float lastMemoryCleanup = 0f;
+    private MagneticStripeGenerator magneticStripeGenerator;
     private Queue<Texture2D> texturePool = new Queue<Texture2D>();
     private const int MAX_POOL_SIZE = 10;
     
-    private int currentImageIndex = 0;
-    private bool isGenerating = false;
-    private List<GameObject> addedElements = new List<GameObject>();
-    
-    // Performance monitoring
-    private System.Diagnostics.Stopwatch generationTimer = new System.Diagnostics.Stopwatch();
+    // Remove the blend mode field
+    // private string currentGenerationBlendMode = "Alpha";
     
     void Start()
     {
@@ -116,200 +105,69 @@ public class Synthesize : MonoBehaviour
         LoadAssets();
         SetupCamera();
         SetupMagneticStripe();
-       ///SetupLighting();
         SetupRenderTexture();
-        DisableGlobalPostProcessing();
         
-        // Start generation
         GenerateCreditCards();
     }
     
-    void SetupMagneticStripe()
+    void Update()
     {
-        if (magneticStripeGenerator == null)
+        // Handle continuous generation
+        if (continuousGeneration && !isGenerating && currentImageCount >= numberOfImages)
         {
-            magneticStripeGenerator = gameObject.AddComponent<MagneticStripeGenerator>();
+            RestartGeneration();
         }
-    }
-    void DisableGlobalPostProcessing()
-    {
-        try
+        
+        // Periodic memory cleanup for long-running operations
+        if (Time.time - lastMemoryCleanup > memoryCleanupInterval)
         {
-            // Disable any global post-processing settings
-            QualitySettings.antiAliasing = 0; // Disable antialiasing
-            QualitySettings.softParticles = false; // Disable soft particles
-            QualitySettings.realtimeReflectionProbes = false; // Disable real-time reflection probes
-            
-            // Disable any post-processing volumes in the scene
-            var allVolumes = FindObjectsByType<UnityEngine.Rendering.Volume>(FindObjectsSortMode.None);
-            foreach (var volume in allVolumes)
-            {
-                if (volume.isGlobal)
-                {
-                    volume.enabled = false;
-                    Debug.Log($"Disabled global post-processing volume: {volume.name}");
-                }
-            }
-            
-            Debug.Log("Global post-processing settings disabled");
-        }
-        catch (System.Exception e)
-        {
-            Debug.LogWarning($"Could not disable global post-processing: {e.Message}");
+            CleanupMemory();
+            lastMemoryCleanup = Time.time;
         }
     }
     
-    void SetupLighting()
+    void RestartGeneration()
     {
-        if (!setupLighting) return;
-        
-        try
-        {
-            // Find or create main light
-            Light mainLight = FindFirstObjectByType<Light>();
-            if (mainLight == null)
-            {
-                GameObject mainLightGO = new GameObject("Main Light");
-                mainLight = mainLightGO.AddComponent<Light>();
-                Debug.Log("Added Main Light");
-            }
-            
-            // Configure main light
-            mainLight.type = LightType.Directional;
-            mainLight.intensity = mainLightIntensity;
-            mainLight.color = mainLightColor;
-            mainLight.shadows = LightShadows.Soft;
-            mainLight.shadowStrength = 0.5f;
-            
-            // Set emission intensity for HDRP
-            var hdLightData = mainLight.GetComponent<UnityEngine.Rendering.HighDefinition.HDAdditionalLightData>();
-            if (hdLightData != null)
-            {
-                //hdLightData.intensity = mainLightIntensity;
-                //hdLightData.luxAtDistance = emissionIntensity; // Use emission intensity setting
-                hdLightData.affectDiffuse = true;
-                hdLightData.affectSpecular = false; // Disable specular to prevent glow
-                Debug.Log($"Configured HDRP light emission settings - Intensity: {mainLightIntensity}, Emission: {emissionIntensity}");
-            }
-            
-            // Position main light
-            mainLight.transform.rotation = Quaternion.Euler(45f, 45f, 0f);
-            
-            // // Create fill light
-            // GameObject fillLightGO = new GameObject("Fill Light");
-            // Light fillLight = fillLightGO.AddComponent<Light>();
-            // fillLight.type = LightType.Directional;
-            // fillLight.intensity = fillLightIntensity;
-            // fillLight.color = fillLightColor;
-            // fillLight.shadows = LightShadows.None;
-            
-            // // Position fill light opposite to main light
-            // fillLight.transform.rotation = Quaternion.Euler(-45f, -45f, 0f);
-            
-            // Set exposure if using HDRP
-            SetExposure();
-            
-            Debug.Log("Lighting setup complete");
-        }
-        catch (System.Exception e)
-        {
-            Debug.LogError($"Error setting up lighting: {e.Message}");
-        }
+        currentImageCount = 0;
+        isGenerating = true;
+        GenerateCreditCards();
     }
     
-    void SetExposure()
+    void CleanupMemory()
     {
-        // HDRP exposure control through Volume system
-        if (defaultVolumeProfile != null)
-        {
-            // Try to get exposure component using the correct API
-            if (defaultVolumeProfile.TryGet(out UnityEngine.Rendering.HighDefinition.Exposure exposureComponent))
-            {
-                exposureComponent.fixedExposure.value = exposure;
-                Debug.Log($"Set HDRP exposure to {exposure} via Default Volume Profile");
-            }
-            else
-            {
-                Debug.LogWarning("Could not find Exposure component in Default Volume Profile");
-            }
-        }
-        else
-        {
-            Debug.LogWarning("Default Volume Profile not assigned - cannot set HDRP exposure");
-        }
+        // Force garbage collection
+        System.GC.Collect();
         
-        Debug.Log($"Set HDRP exposure to {exposure}");
+        // Clean up texture pool
+        CleanupTexturePool();
+        
+        // Clean up any temporary objects
+        Resources.UnloadUnusedAssets();
     }
     
     void InitializeSystem()
     {
-        try
+        // Find card model if not assigned
+        if (cardModel == null)
         {
-            // Create card colors
-            cardColors.AddRange(new Color[] {
-                Color.white,
-                Color.black,
-                new Color(0.1f, 0.1f, 0.3f), // Dark blue
-                new Color(0.3f, 0.1f, 0.1f), // Dark red
-                new Color(0.1f, 0.3f, 0.1f), // Dark green
-                new Color(0.8f, 0.6f, 0.2f), // Gold
-                new Color(0.2f, 0.2f, 0.2f), // Dark gray
-                new Color(0.9f, 0.9f, 0.9f)  // Light gray
-            });
-            
-            // Find card model if not assigned
+            cardModel = GameObject.Find("card");
             if (cardModel == null)
             {
-                cardModel = GameObject.Find("card");
-                if (cardModel == null)
-                {
-                    Debug.LogWarning("Card model not found. Please assign a card model in the inspector.");
-                }
+                Debug.LogWarning("Card model not found. Please assign a card model in the inspector.");
             }
-            
-            // Scale card to standard dimensions
-            // if (useStandardCardDimensions && cardModel != null)
-            // {
-            //     ScaleCardToStandardDimensions();
-            // }
-            
-            // Find camera if not assigned
-            if (renderCamera == null)
-            {
-                renderCamera = Camera.main;
-                if (renderCamera == null)
-                {
-                    Debug.LogWarning("No camera found. Please assign a camera in the inspector.");
-                }
-            }
-            
-            if (cameraTransform == null && renderCamera != null)
-            {
-                cameraTransform = renderCamera.transform;
-            }
-            
-          
-            // Ensure name generator is available
-            NameGenerator nameGenerator = GetComponent<NameGenerator>();
-            if (nameGenerator == null)
-            {
-                nameGenerator = gameObject.AddComponent<NameGenerator>();
-                Debug.Log("Added NameGenerator component");
-            }
-            
-            // Find or add text generator
-            textGenerator = GetComponent<CreditCardTextGenerator>();
-            if (textGenerator == null)
-            {
-                textGenerator = gameObject.AddComponent<CreditCardTextGenerator>();
-            }
-            
-            
         }
-        catch (System.Exception e)
+        
+        // Find camera if not assigned
+        if (mainCamera == null)
         {
-            Debug.LogError($"Error in InitializeSystem: {e.Message}");
+            mainCamera = Camera.main;
+            if (mainCamera == null)
+            {
+                Debug.LogWarning("No camera found. Please assign a camera in the inspector.");
+            }
         }
+        
+        
     }
     
     void LoadAssets()
@@ -326,21 +184,43 @@ public class Synthesize : MonoBehaviour
         // Load bank logo images
         LoadTexturesFromFolder(bankLogoImagesFolder, bankLogoTextures);
         
-        // Load skybox images
-        LoadSkyboxTextures();
+        // Load skybox cubemaps
+        LoadSkyboxCubemaps();
         
         // Load fonts
-        LoadFontsFromFolder(fontsFolder);
+        LoadCardFontsFromFolder(cardFontsFolder);
         
-        //Debug.Log($"Loaded {frontTextures.Count} front textures, {chipTextures.Count} chip textures, {logoTextures.Count} logo textures, {bankLogoTextures.Count} bank logos, {skyboxTextures.Count} skybox textures, {skyboxCubemaps.Count} skybox cubemaps, {availableFonts.Count} fonts");
-        
+        // Load signature
+        LoadSignature();
+    }
+    
+    void LoadSignature()
+    {
+        string signaturePath = "Assets/signature.png";
+        signatureTexture = AssetDatabase.LoadAssetAtPath<Texture2D>(signaturePath);
+        if (signatureTexture != null)
+        {
+            // Create a readable copy if needed
+            if (!signatureTexture.isReadable)
+            {
+                signatureTexture = CreateReadableTextureCopy(signatureTexture);
+            }
+            
+            // Set texture properties
+            signatureTexture.filterMode = FilterMode.Bilinear;
+            signatureTexture.wrapMode = TextureWrapMode.Clamp;
+        }
+        else
+        {
+            Debug.LogWarning("Signature texture not found at: " + signaturePath);
+        }
     }
     
     void LoadTexturesFromFolder(string folderPath, List<Texture2D> textureList)
     {
         textureList.Clear();
         
-        if (!System.IO.Directory.Exists(folderPath))
+        if (!Directory.Exists(folderPath))
         {
             Debug.LogWarning($"Folder not found: {folderPath}");
             return;
@@ -349,50 +229,38 @@ public class Synthesize : MonoBehaviour
         string[] imageExtensions = { "*.png", "*.jpg", "*.jpeg" };
         foreach (string extension in imageExtensions)
         {
-            string[] files = System.IO.Directory.GetFiles(folderPath, extension);
+            string[] files = Directory.GetFiles(folderPath, extension);
             foreach (string file in files)
             {
-                // Try loading directly from file data first to preserve original dimensions
                 Texture2D texture = LoadTextureFromFile(file);
                 if (texture == null)
                 {
-                    // Fallback to AssetDatabase loading
-                    Texture2D originalTexture = UnityEditor.AssetDatabase.LoadAssetAtPath<Texture2D>(file);
+                    Texture2D originalTexture = AssetDatabase.LoadAssetAtPath<Texture2D>(file);
                     if (originalTexture != null)
                     {
-                        // Debug the original texture dimensions
-                        Debug.Log($"Original texture: {originalTexture.name} - Size: {originalTexture.width}x{originalTexture.height}, Readable: {originalTexture.isReadable}");
-                        
-                        // Create a readable copy of the texture
                         texture = CreateReadableTextureCopy(originalTexture);
                     }
                 }
                 
                 if (texture != null)
                 {
-                    // Ensure sharp filtering for all loaded textures
                     texture.filterMode = FilterMode.Bilinear;
                     texture.wrapMode = TextureWrapMode.Clamp;
                     textureList.Add(texture);
                 }
             }
         }
-        
-        Debug.Log($"Loaded {textureList.Count} textures from {folderPath}");
     }
     
     Texture2D LoadTextureFromFile(string filePath)
     {
         try
         {
-            // Load the file data
-            byte[] fileData = System.IO.File.ReadAllBytes(filePath);
+            byte[] fileData = File.ReadAllBytes(filePath);
             
-            // Create a new texture and load the image data
             Texture2D texture = new Texture2D(2, 2);
             if (texture.LoadImage(fileData))
             {
-                Debug.Log($"Loaded texture from file: {System.IO.Path.GetFileName(filePath)} - Size: {texture.width}x{texture.height}");
                 return texture;
             }
             else
@@ -404,7 +272,7 @@ public class Synthesize : MonoBehaviour
         }
         catch (System.Exception e)
         {
-            Debug.LogWarning($"Error loading texture from file {filePath}: {e.Message}");
+            Debug.LogError($"Error loading texture from file: {e.Message}");
             return null;
         }
     }
@@ -415,273 +283,155 @@ public class Synthesize : MonoBehaviour
         
         try
         {
-            // Create a render texture to copy the source texture
             RenderTexture renderTexture = RenderTexture.GetTemporary(sourceTexture.width, sourceTexture.height, 0, RenderTextureFormat.ARGB32);
             renderTexture.filterMode = FilterMode.Bilinear;
             
-            // Copy the source texture to the render texture
             Graphics.Blit(sourceTexture, renderTexture);
             
-            // Create a new readable texture
             Texture2D readableTexture = new Texture2D(sourceTexture.width, sourceTexture.height, TextureFormat.RGBA32, false);
             readableTexture.filterMode = FilterMode.Bilinear;
             readableTexture.wrapMode = TextureWrapMode.Clamp;
             
-            // Read pixels from render texture
             RenderTexture.active = renderTexture;
             readableTexture.ReadPixels(new Rect(0, 0, sourceTexture.width, sourceTexture.height), 0, 0);
             readableTexture.Apply();
             RenderTexture.active = null;
             
-            // Release the temporary render texture
             RenderTexture.ReleaseTemporary(renderTexture);
-            
-            // Log texture info for debugging
-            float aspectRatio = (float)readableTexture.width / readableTexture.height;
-            Debug.Log($"Created readable copy: {sourceTexture.name} - Size: {readableTexture.width}x{readableTexture.height}, Aspect: {aspectRatio:F2}");
             
             return readableTexture;
         }
         catch (System.Exception e)
         {
-            Debug.LogWarning($"Could not create readable copy of texture {sourceTexture.name}: {e.Message}");
+            Debug.LogError($"Could not create readable copy of texture {sourceTexture.name}: {e.Message}");
             return null;
         }
     }
     
-    void LoadSkyboxTextures()
+    void LoadCardFontsFromFolder(string folderPath)
     {
-        if (!Directory.Exists(skyboxImagesFolder))
+        cardFonts.Clear();
+        
+        if (!Directory.Exists(folderPath))
         {
-            Debug.LogWarning($"Skybox folder not found: {skyboxImagesFolder}");
+            Debug.LogWarning($"Card Font folder not found: {folderPath}");
             return;
         }
-        
-        string[] exrFiles = Directory.GetFiles(skyboxImagesFolder, "*.exr");
-        
-        foreach (string filePath in exrFiles)
+
+        CreateFontAssetsFromRawFiles(folderPath);
+
+        string[] fontExtensions = { "*.asset" };
+        foreach (string extension in fontExtensions)
         {
-            byte[] fileData = File.ReadAllBytes(filePath);
-            Texture2D texture = new Texture2D(2, 2);
-            if (texture.LoadImage(fileData))
+            string[] files = Directory.GetFiles(folderPath, extension);
+            foreach (string file in files)
             {
-                // For HDRP, we need to convert 2D textures to cubemaps
-                bool isHDRP = GraphicsSettings.defaultRenderPipeline != null && 
-                              GraphicsSettings.defaultRenderPipeline.GetType().Name.Contains("HDRenderPipelineAsset");
-                
-                if (isHDRP)
+                TMPro.TMP_FontAsset fontAsset = AssetDatabase.LoadAssetAtPath<TMPro.TMP_FontAsset>(file);
+                if (fontAsset != null && fontAsset.atlasTexture != null)
                 {
-                    // Convert 2D texture to cubemap for HDRP
-                    Cubemap cubemap = ConvertToCubemap(texture);
-                    if (cubemap != null)
-                    {
-                        skyboxCubemaps.Add(cubemap);
-                    }
+                    cardFonts.Add(fontAsset);
+                }
+                else if (fontAsset != null)
+                {
+                    Debug.LogWarning($"Skipping corrupted font asset: {fontAsset.name} (missing atlas texture)");
+                }
+            }
+        }
+    }
+    
+    void CreateFontAssetsFromRawFiles(string folderPath)
+    {
+        string[] ttfFiles = Directory.GetFiles(folderPath, "*.ttf");
+        string[] otfFiles = Directory.GetFiles(folderPath, "*.otf");
+        string[] allFontFiles = ttfFiles.Concat(otfFiles).ToArray();
+        
+        foreach (string fontFile in allFontFiles)
+        {
+            string fileName = Path.GetFileNameWithoutExtension(fontFile);
+            string assetPath = Path.Combine(folderPath, fileName + ".asset");
+            
+            if (File.Exists(assetPath))
+            {
+                TMPro.TMP_FontAsset existingAsset = AssetDatabase.LoadAssetAtPath<TMPro.TMP_FontAsset>(assetPath);
+                if (existingAsset != null && existingAsset.atlasTexture != null)
+                {
+                    continue;
                 }
                 else
                 {
-                    skyboxTextures.Add(texture);
+                    AssetDatabase.DeleteAsset(assetPath);
                 }
             }
-        }
-    }
-    
-    Cubemap ConvertToCubemap(Texture2D sourceTexture)
-    {
-        // Create a more realistic cubemap from the 2D texture
-        int size = Mathf.Max(sourceTexture.width, sourceTexture.height);
-        Cubemap cubemap = new Cubemap(size, TextureFormat.RGB24, false);
-        
-        Debug.Log($"Converting 2D texture ({sourceTexture.width}x{sourceTexture.height}) to cubemap ({size}x{size})");
-        
-        // Create a more sophisticated mapping for each face
-        for (int face = 0; face < 6; face++)
-        {
-            for (int x = 0; x < size; x++)
-            {
-                for (int y = 0; y < size; y++)
-                {
-                    // Convert cubemap coordinates to spherical coordinates
-                    Vector3 direction = GetDirectionFromCubemapFace((CubemapFace)face, x, y, size);
-                    
-                    // Convert spherical coordinates to texture coordinates
-                    Vector2 texCoord = GetTextureCoordinateFromDirection(direction, sourceTexture.width, sourceTexture.height);
-                    
-                    // Sample the texture
-                    Color color = sourceTexture.GetPixelBilinear(texCoord.x, texCoord.y);
-                    cubemap.SetPixel((CubemapFace)face, x, y, color);
-                }
-            }
-        }
-        
-        cubemap.Apply();
-        Debug.Log($"Created cubemap: {cubemap.name}");
-        return cubemap;
-    }
-    
-    Vector3 GetDirectionFromCubemapFace(CubemapFace face, int x, int y, int size)
-    {
-        // Convert cubemap face coordinates to 3D direction
-        float u = (float)x / size * 2f - 1f;
-        float v = (float)y / size * 2f - 1f;
-        
-        switch (face)
-        {
-            case CubemapFace.PositiveX: return new Vector3(1f, -v, -u);
-            case CubemapFace.NegativeX: return new Vector3(-1f, -v, u);
-            case CubemapFace.PositiveY: return new Vector3(u, 1f, v);
-            case CubemapFace.NegativeY: return new Vector3(u, -1f, -v);
-            case CubemapFace.PositiveZ: return new Vector3(u, -v, 1f);
-            case CubemapFace.NegativeZ: return new Vector3(-u, -v, -1f);
-            default: return Vector3.forward;
-        }
-    }
-    
-    Vector2 GetTextureCoordinateFromDirection(Vector3 direction, int textureWidth, int textureHeight)
-    {
-        // Convert 3D direction to spherical coordinates
-        float theta = Mathf.Atan2(direction.z, direction.x);
-        float phi = Mathf.Acos(Mathf.Clamp(direction.y, -1f, 1f));
-        
-        // Convert to texture coordinates
-        float u = (theta / (2f * Mathf.PI) + 0.5f);
-        float v = phi / Mathf.PI;
-        
-        // Ensure coordinates are in valid range
-        u = Mathf.Clamp01(u);
-        v = Mathf.Clamp01(v);
-        
-        return new Vector2(u, v);
-    }
-    
-    void LoadFontsFromFolder(string folderPath)
-    {
-        if (!Directory.Exists(folderPath))
-        {
-            Debug.LogWarning($"Font folder not found: {folderPath}");
-            return;
-        }
-        
-        string[] fontFiles = Directory.GetFiles(folderPath, "*.ttf")
-            .Concat(Directory.GetFiles(folderPath, "*.otf"))
-            .ToArray();
             
-        foreach (string filePath in fontFiles)
-        {
-            Font font = new Font(filePath);
-            if (font != null)
+            try
             {
-                availableFonts.Add(font);
+                Font font = AssetDatabase.LoadAssetAtPath<Font>(fontFile);
+                if (font == null)
+                {
+                    Debug.LogWarning($"Could not load font file: {fontFile}");
+                    continue;
+                }
+                
+                TMPro.TMP_FontAsset tmpFontAsset = TMPro.TMP_FontAsset.CreateFontAsset(font, 90, 9, UnityEngine.TextCore.LowLevel.GlyphRenderMode.SDFAA, 1024, 1024, TMPro.AtlasPopulationMode.Dynamic);
+                if (tmpFontAsset != null)
+                {
+                    if (tmpFontAsset.atlasTexture == null)
+                    {
+                        Debug.LogWarning($"Atlas texture not generated for: {fileName}, skipping");
+                        DestroyImmediate(tmpFontAsset);
+                        continue;
+                    }
+                    
+                    AssetDatabase.CreateAsset(tmpFontAsset, assetPath);
+                    AssetDatabase.SaveAssets();
+                    AssetDatabase.Refresh();
+                }
+                else
+                {
+                    Debug.LogWarning($"Failed to create TMP_FontAsset for: {fontFile}");
+                }
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogError($"Error creating TMP_FontAsset for {fontFile}: {e.Message}");
             }
         }
+    }
+    
+    void SetupMagneticStripe()
+    {
+        magneticStripeGenerator = new MagneticStripeGenerator();
     }
     
     void SetupCamera()
     {
-        if (renderCamera == null) return;
+        if (mainCamera == null) return;
         
         // Set camera to render texture
-        renderCamera.targetTexture = renderTexture;
+        // mainCamera.targetTexture = renderTexture;
         
-        // HDRP-specific camera settings
-        renderCamera.clearFlags = CameraClearFlags.Skybox;
-        renderCamera.farClipPlane = 1000f;
-        renderCamera.nearClipPlane = 0.1f;
-        renderCamera.fieldOfView = 60f;
+        // Built-in Render Pipeline camera settings
+        mainCamera.clearFlags = CameraClearFlags.Skybox;
+        mainCamera.farClipPlane = 1000f;
+        mainCamera.nearClipPlane = 0.1f;
+        mainCamera.fieldOfView = 60f;
         
-        // Configure HDRP camera data
-        var hdCameraData = renderCamera.GetComponent<UnityEngine.Rendering.HighDefinition.HDAdditionalCameraData>();
-        if (hdCameraData != null)
-        {
-            // Disable anti-aliasing to prevent blur
-            hdCameraData.antialiasing = UnityEngine.Rendering.HighDefinition.HDAdditionalCameraData.AntialiasingMode.None;
-            
-            Debug.Log("Configured HDRP camera settings");
-        }
-        
-        // Disable post-processing effects that cause blur
-        DisablePostProcessingEffects();
-        
-        Debug.Log("Camera setup complete - HDRP optimized");
-    }
-    
-    void DisablePostProcessingEffects()
-    {
-        try
-        {
-            // HDRP post-processing is handled through Volume system
-            DisableHDRPPostProcessing();
-        }
-        catch (System.Exception e)
-        {
-            Debug.LogWarning($"Could not disable post-processing effects: {e.Message}");
-        }
-    }
-    
-    void DisableHDRPPostProcessing()
-    {
-        // Use the configured Default Settings Volume Profile for post-processing
-        if (defaultVolumeProfile != null)
-        {
-            // Disable Depth of Field
-            if (defaultVolumeProfile.TryGet(out UnityEngine.Rendering.HighDefinition.DepthOfField depthOfField))
-            {
-                depthOfField.active = false;
-                Debug.Log("Disabled HDRP Depth of Field in Default Volume Profile");
-            }
-            
-            // Disable Motion Blur
-            if (defaultVolumeProfile.TryGet(out UnityEngine.Rendering.HighDefinition.MotionBlur motionBlur))
-            {
-                motionBlur.active = false;
-                Debug.Log("Disabled HDRP Motion Blur in Default Volume Profile");
-            }
-            
-            // Disable Bloom
-            if (defaultVolumeProfile.TryGet(out UnityEngine.Rendering.HighDefinition.Bloom bloom))
-            {
-                bloom.active = false;
-                Debug.Log("Disabled HDRP Bloom in Default Volume Profile");
-            }
-            
-            // Disable Chromatic Aberration
-            if (defaultVolumeProfile.TryGet(out UnityEngine.Rendering.HighDefinition.ChromaticAberration chromaticAberration))
-            {
-                chromaticAberration.active = false;
-                Debug.Log("Disabled HDRP Chromatic Aberration in Default Volume Profile");
-            }
-            
-            // Disable other blur effects
-            if (defaultVolumeProfile.TryGet(out UnityEngine.Rendering.HighDefinition.Vignette vignette))
-            {
-                vignette.active = false;
-                Debug.Log("Disabled HDRP Vignette in Default Volume Profile");
-            }
-            
-            if (defaultVolumeProfile.TryGet(out UnityEngine.Rendering.HighDefinition.PaniniProjection paniniProjection))
-            {
-                paniniProjection.active = false;
-                Debug.Log("Disabled HDRP Panini Projection in Default Volume Profile");
-            }
-        }
-        else
-        {
-            Debug.LogWarning("Default Volume Profile not assigned - cannot disable HDRP post-processing");
-        }
+        // Enable anti-aliasing for smoother edges
+        mainCamera.allowMSAA = true;
     }
     
     void SetupRenderTexture()
     {
-        // Create high-quality render texture with no filtering
-        renderTexture = new RenderTexture(imageWidth, imageHeight, 24);
-        renderTexture.antiAliasing = 1; // No anti-aliasing to prevent blur
-        renderTexture.filterMode = FilterMode.Bilinear; // Sharp pixel rendering
+        // Create high-quality render texture with anti-aliasing for soft edges
+        renderTexture = new RenderTexture(1024, 1024, 24);
+        renderTexture.antiAliasing = 4; // Enable 4x MSAA for smooth edges
+        renderTexture.filterMode = FilterMode.Trilinear; // Softer filtering for smoother edges
         renderTexture.wrapMode = TextureWrapMode.Clamp;
         renderTexture.Create();
         
-        // Create capture texture with point filtering for sharpness
-        captureTexture = new Texture2D(imageWidth, imageHeight, TextureFormat.RGB24, false);
-        captureTexture.filterMode = FilterMode.Bilinear;
+        // Create capture texture with trilinear filtering for smoothness
+        captureTexture = new Texture2D(1024, 1024, TextureFormat.RGB24, false);
+        captureTexture.filterMode = FilterMode.Trilinear; // Softer filtering
         captureTexture.wrapMode = TextureWrapMode.Clamp;
     }
     
@@ -690,38 +440,46 @@ public class Synthesize : MonoBehaviour
         if (isGenerating) return;
         
         isGenerating = true;
-        currentImageIndex = 0;
-        generationTimer.Reset();
-        generationTimer.Start();
-        
-        Debug.Log($"Starting generation of {imagesToGenerate} credit card images...");
-        
-        // Start the generation process
+        currentImageCount = 0;
         GenerateNextCard();
     }
     
     void GenerateNextCard()
     {
-        if (currentImageIndex >= imagesToGenerate)
+        // Check if we should pause when Unity loses focus
+        if (pauseOnFocusLoss && !EditorApplication.isPlaying)
         {
-            isGenerating = false;
-            generationTimer.Stop();
-            
-            // Calculate performance metrics
-            float totalTime = (float)generationTimer.ElapsedMilliseconds / 1000f;
-            float avgTime = totalTime / imagesToGenerate;
-            float cardsPerSecond = imagesToGenerate / totalTime;
-            
-            Debug.Log($"Credit card generation complete!");
-            Debug.Log($"Performance: {totalTime:F2}s total, {avgTime:F3}s per card, {cardsPerSecond:F1} cards/second");
-            
             return;
         }
         
-        // Generate random card
+        if (currentImageCount < numberOfImages)
+        {
+            
+            // Add delay between generations for background operation
+            if (generationDelay > 0)
+            {
+                StartCoroutine(GenerateCardWithDelay());
+            }
+            else
+            {
+                GenerateRandomCard();
+                // Capture and save the image
+                StartCoroutine(CaptureAndSave());
+            }
+        }
+        else
+        {
+            // Generation complete
+            isGenerating = false;
+            
+        }
+    }
+    
+    System.Collections.IEnumerator GenerateCardWithDelay()
+    {
+        yield return new WaitForSeconds(generationDelay);
         GenerateRandomCard();
-        
-        // Capture image
+        // Capture and save the image
         StartCoroutine(CaptureAndSave());
     }
     
@@ -729,252 +487,573 @@ public class Synthesize : MonoBehaviour
     {
         if (cardModel == null) return;
         
+        bool isCardBack = Random.Range(0f, 1f) < 0.5f;
+        
+        // Remove blend mode selection
+        // SelectRandomBlendModeForGeneration();
         
         // Randomize card position and rotation
         RandomizeCardTransform();
         
+        // Randomize text setup position and content
+        RandomizeTextSetup(isCardBack);
+        
+        // Apply random skybox with delay
+        StartCoroutine(ApplySkyboxWithDelay());
+        
+        // Apply random materials with superimposed logos
+        ApplyRandomMaterialsWithLogos(isCardBack);
+        
+    }
+    
+    // Remove the SelectRandomBlendModeForGeneration method
+    // void SelectRandomBlendModeForGeneration()
+    // {
+    //     // Define available blend modes
+    //     string[] blendModes = {
+    //         "Alpha",           // Normal alpha blending
+    //         "Additive",        // Additive blending
+    //         "Multiply",        // Multiply blending
+    //         "Screen",          // Screen blending
+    //         "Overlay",         // Overlay blending
+    //         "SoftLight",       // Soft light blending
+    //         "HardLight",       // Hard light blending
+    //         "ColorDodge",      // Color dodge blending
+    //         "ColorBurn",       // Color burn blending
+    //         "Darken",          // Darken blending
+    //         "Lighten"          // Lighten blending
+    //     };
+        
+    //     // Select random blend mode for this generation
+    //     currentGenerationBlendMode = blendModes[Random.Range(0, blendModes.Length)];
+    //     Debug.Log($"Selected blend mode for this generation: {currentGenerationBlendMode}");
+    // }
+    
+    System.Collections.IEnumerator ApplySkyboxWithDelay()
+    {
         // Apply random skybox
         ApplyRandomSkybox();
         
-        // Apply random materials with superimposed logos
-        ApplyRandomMaterialsWithLogos();
+        // Wait a frame to let Unity update the environment map
+        yield return null;
         
-        // Ensure card model uses sharp rendering
-        EnsureSharpCardRendering();
+        // Additional small delay to ensure environment map is properly set
+        yield return new WaitForSeconds(0.1f);
+        
+        Debug.Log("Skybox applied with delay, environment map should be updated");
     }
     
-    void EnsureSharpCardRendering()
+    void RandomizeTextSetup(bool isCardBack)
     {
-        if (cardModel == null) return;
+        if (textSetup == null) return;
         
-        // Get all renderers in the card model hierarchy
-        Renderer[] renderers = cardModel.GetComponentsInChildren<Renderer>();
-        foreach (Renderer renderer in renderers)
+        // Randomize the position of the TextSetup GameObject
+        Vector3 currentPosition = textSetup.transform.localPosition;
+        Vector3 randomOffset = new Vector3(
+            Random.Range(0.0f, 0.05f), // Small random X offset
+            Random.Range(-0.03f, 0.01f), // Small random Y offset
+            0.0f
+        );
+        
+        // Different positioning for back design simulation
+        if (isCardBack) {
+            randomOffset = new Vector3(
+                Random.Range(0.0f, 0.2f), // Different X offset for back design
+                Random.Range(-0.03f, 0.03f), // Different Y offset for back design
+                0.0f
+            );
+        }
+        textSetup.transform.localPosition = randomOffset;
+        
+        // Get all children and randomize their Y positions
+        List<float> children = new List<float>();
+        for (int i = 0; i < textSetup.transform.childCount; i++)
         {
-            // Ensure renderer doesn't cast shadows (can cause blur)
-            renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
-            renderer.receiveShadows = false;
-            
-            // Ensure materials use sharp filtering
-            if (renderer.material != null)
+            children.Add(textSetup.transform.GetChild(i).localPosition.y);
+        }
+
+        // Shuffle the children list
+        for (int i = 0; i < children.Count; i++)
+        {
+            int rnd = Random.Range(i, children.Count);
+            float temp = children[i];
+            children[i] = children[rnd];
+            children[rnd] = temp;
+        }
+
+        // Loop through the textSetup children and reassign the y values
+        for (int i = 0; i < textSetup.transform.childCount; i++)
+        {
+            Transform child = textSetup.transform.GetChild(i);
+            Vector3 pos = child.localPosition;
+            pos.y = children[i];
+            child.localPosition = pos;
+        }
+        
+        // Choose a random font for this rendering
+        TMPro.TMP_FontAsset randomFont = null;
+        if (cardFonts.Count > 0)
+        {
+            randomFont = cardFonts[Random.Range(0, cardFonts.Count)];
+        }
+
+        // Generate random color
+        Color randomColor = GenerateRandomTextColor();
+        
+        randomColor = GenerateChromeReflectionColor(randomColor);
+
+
+       
+        
+        // Assign random text content and font to credit card fields
+        void ApplyRandomTextAndFontRecursive(Transform parent, TMPro.TMP_FontAsset font, Color textColor)
+        {
+            foreach (Transform child in parent)
             {
-                EnsureSharpMaterialRendering(renderer.material);
+                string childName = child.name;
+                TMPro.TextMeshPro textMesh = child.GetComponent<TMPro.TextMeshPro>();
+
+                if (textMesh != null)
+                {
+                    // Apply random font if available
+                    if (font != null)
+                    {
+                        textMesh.font = font;
+                    }
+
+                    // Apply text color and chrome effects
+                    ApplyTextEffects(textMesh, textColor);
+
+                    // Always assign text content regardless of front/back design
+                    switch (childName)
+                    {
+                        case "Name":
+                            textMesh.text = GenerateRandomName();
+                            break;
+                        case "Number":
+                            textMesh.text = GenerateRandomCardNumber();
+                            break;
+                        case "Expires":
+                            textMesh.text = GenerateRandomExpiryDate();
+                            break;
+                        case "CVC":
+                            textMesh.text = GenerateRandomCVC();
+                            break;
+                        case "Expires Label":
+                            string[] options = { "Expires", "Expires On", "Expires On", "Exp", "Exp Date" };
+                            textMesh.text = options[Random.Range(0, options.Length)];
+                            textMesh.text = string.Join("\n",textMesh.text.Split(" "));
+                            break;
+                        case "CVC Label":
+                            string[] options2 = { "CVC", "CVV", "Sec Code", "CVC2" };
+                            textMesh.text = options2[Random.Range(0, options2.Length)];
+                            textMesh.text = string.Join("\n",textMesh.text.Split(" "));
+                            break;
+                    }
+                }
+
+                // Recursively process children
+                if (child.childCount > 0)
+                {
+                    ApplyRandomTextAndFontRecursive(child, font, textColor);
+                }
             }
         }
+
+        // Call the recursive function for each top-level child
+        ApplyRandomTextAndFontRecursive(textSetup.transform, randomFont, randomColor);
         
-        // Also check for any mesh renderers and ensure they're optimized
-        MeshRenderer[] meshRenderers = cardModel.GetComponentsInChildren<MeshRenderer>();
-        foreach (MeshRenderer meshRenderer in meshRenderers)
+    }
+    
+    string GenerateRandomName()
+    {
+        // Simple inline name generation to avoid compilation issues
+        string[] firstNames = {
+            "JAMES", "MARY", "JOHN", "PATRICIA", "ROBERT", "JENNIFER", "MICHAEL", "LINDA", "WILLIAM", "ELIZABETH",
+            "DAVID", "BARBARA", "RICHARD", "SUSAN", "JOSEPH", "JESSICA", "THOMAS", "SARAH", "CHRISTOPHER", "KAREN",
+            "CHARLES", "NANCY", "DANIEL", "LISA", "MATTHEW", "BETTY", "ANTHONY", "HELEN", "MARK", "SANDRA",
+            "DONALD", "DONNA", "STEVEN", "CAROL", "PAUL", "RUTH", "ANDREW", "SHARON", "JOSHUA", "MICHELLE",
+            "KENNETH", "LAURA", "KEVIN", "EMILY", "BRIAN", "KIMBERLY", "GEORGE", "DEBORAH", "EDWARD", "DOROTHY",
+            "RONALD", "LISA", "TIMOTHY", "NANCY", "JASON", "KAREN", "JEFFREY", "BETTY", "RYAN", "HELEN",
+            "JACOB", "SANDRA", "GARY", "DONNA", "NICHOLAS", "CAROL", "ERIC", "RUTH", "JONATHAN", "SHARON",
+            "STEPHEN", "MICHELLE", "LARRY", "LAURA", "JUSTIN", "EMILY", "SCOTT", "KIMBERLY", "BRANDON", "DEBORAH",
+            "BENJAMIN", "DOROTHY", "SAMUEL", "LISA", "FRANK", "NANCY", "GREGORY", "KAREN", "RAYMOND", "BETTY",
+            "ALEXANDER", "HELEN", "PATRICK", "SANDRA", "JACK", "DONNA", "DENNIS", "CAROL", "JERRY", "RUTH"
+        };
+        
+        string[] lastNames = {
+            "SMITH", "JOHNSON", "WILLIAMS", "BROWN", "JONES", "GARCIA", "MILLER", "DAVIS", "RODRIGUEZ", "MARTINEZ",
+            "HERNANDEZ", "LOPEZ", "GONZALEZ", "WILSON", "ANDERSON", "THOMAS", "TAYLOR", "MOORE", "JACKSON", "MARTIN",
+            "LEE", "PEREZ", "THOMPSON", "WHITE", "HARRIS", "SANCHEZ", "CLARK", "RAMIREZ", "LEWIS", "ROBINSON",
+            "WALKER", "YOUNG", "ALLEN", "KING", "WRIGHT", "SCOTT", "TORRES", "NGUYEN", "HILL", "FLORES",
+            "GREEN", "ADAMS", "NELSON", "BAKER", "HALL", "RIVERA", "CAMPBELL", "MITCHELL", "CARTER", "ROBERTS",
+            "GOMEZ", "PHILLIPS", "EVANS", "TURNER", "DIAZ", "PARKER", "CRUZ", "EDWARDS", "COLLINS", "REYES",
+            "STEWART", "MORRIS", "MORALES", "MURPHY", "COOK", "ROGERS", "GUTIERREZ", "ORTIZ", "MORGAN", "COOPER",
+            "PETERSON", "BAILEY", "REED", "KELLY", "HOWARD", "RAMOS", "KIM", "COX", "WARD", "RICHARDSON",
+            "WATSON", "BROOKS", "CHAVEZ", "WOOD", "JAMES", "BENNETT", "GRAY", "MENDOZA", "RUIZ", "HUGHES",
+            "PRICE", "ALVAREZ", "CASTILLO", "SANDERS", "PATEL", "MYERS", "LONG", "ROSS", "FOSTER", "JIMENEZ"
+        };
+        
+        string[] middleInitials = {
+            "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M",
+            "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z"
+        };
+        string firstName = firstNames[Random.Range(0, firstNames.Length)];
+        string lastName = lastNames[Random.Range(0, lastNames.Length)];
+        if (Random.Range(0, 100) < 50) {
+            return $"{firstName} {lastName}";
+        } 
+        string middleInitial = middleInitials[Random.Range(0, middleInitials.Length)];
+        return $"{firstName} {middleInitial} {lastName}";
+    }
+    
+    string GenerateRandomCardNumber()
+    {
+        // Generate a random 16-digit card number with spaces
+        string number = "";
+        for (int i = 0; i < 16; i++)
         {
-            meshRenderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
-            meshRenderer.receiveShadows = false;
+            number += Random.Range(0, 10).ToString();
+            if (i == 3 || i == 7 || i == 11) // Add spaces after 4th, 8th, and 12th digits
+            {
+                number += " ";
+            }
         }
+        return number;
+    }
+    
+    string GenerateRandomExpiryDate()
+    {
+        // Generate a random expiry date (MM/YY format)
+        int month = Random.Range(1, 13);
+        int year = Random.Range(24, 30); // 2024-2029
+        return $"{month:D2}/{year:D2}";
+    }
+    
+    string GenerateRandomCVC()
+    {
+        // Generate a random 3-digit CVC
+        return Random.Range(100, 1000).ToString();
     }
     
     void RandomizeCardTransform()
     {
-        if (cardModel == null || cameraTransform == null) return;
+        if (cardModel == null || mainCamera == null) return;
         
         Transform cardTransform = cardModel.transform.parent;
         
-        // Random distance from camera (first-person view)
-        float distance = 3.0f;
-        Vector3 cameraForward = cameraTransform.forward;
-        cardTransform.position = cameraTransform.position + cameraForward * distance;
-        //Debug.Log($"Card position: {cardTransform.position}, distance: {distance}");
+        // Random distance from camera (first-person view) - increased distance
+        float distance = 2.0f; // Increased from 0.5-1.0 to 2.0-4.0
+        Vector3 cameraForward = mainCamera.transform.forward;
+        cardTransform.position = mainCamera.transform.position + cameraForward * distance;
         
-        // Random rotation (mostly orthogonal to camera)
+        // Start with card facing camera
+        //cardTransform.rotation = Quaternion.LookRotation(-cameraForward); // Face camera
+        
+        // Add small random rotation for natural variation
         Vector3 randomRotation = new Vector3(
-            Random.Range(-maxRotationAngle, maxRotationAngle),
-            Random.Range(-maxRotationAngle, maxRotationAngle),
-            Random.Range(-maxRotationAngle, maxRotationAngle)
+            Random.Range(minCardRotation, maxCardRotation),
+            Random.Range(minCardRotation, maxCardRotation),
+            Random.Range(minCardRotation, maxCardRotation)
         );
         
-        cardTransform.rotation = Quaternion.LookRotation(cameraForward) * Quaternion.Euler(randomRotation);
+        // Apply random rotation on top of camera-facing rotation
+        cardTransform.rotation *= Quaternion.Euler(randomRotation);
     }
     
     void ApplyRandomSkybox()
     {
-        if (!useRandomSkybox || (skyboxTextures.Count == 0 && skyboxCubemaps.Count == 0)) return;
+        if (!useRandomSkybox || skyboxCubemaps.Count == 0) return;
         
-        // Random rotation
-        float randomRotation = Random.Range(0f, maxSkyboxRotation);
+        float rotation = Random.Range(0f, 360f);
         
-        // Apply HDRP skybox
-        ApplyHDRPSkybox(randomRotation);
-    }
-    
-    void ApplyHDRPSkybox(float rotation)
-    {
         try
         {
-            // Use the configured Default Settings Volume Profile
-            if (defaultVolumeProfile == null)
+            Cubemap randomSkyboxCubemap = skyboxCubemaps[Random.Range(0, skyboxCubemaps.Count)];
+            
+            Material skyboxMaterial = new Material(Shader.Find("Skybox/Cubemap"));
+            skyboxMaterial.SetTexture("_Tex", randomSkyboxCubemap);
+            skyboxMaterial.SetFloat("_Rotation", rotation);
+            skyboxMaterial.SetFloat("_Exposure", 1.0f);
+            
+            RenderSettings.skybox = skyboxMaterial;
+            
+            // Enhanced environment settings for better reflections
+            RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Skybox;
+            RenderSettings.ambientIntensity = 1.0f;
+            
+            // For URP, we need to set the environment map differently
+            // Try both approaches to ensure compatibility
+            try
             {
-                Debug.LogWarning("Default Settings Volume Profile not configured. Please assign it in the inspector.");
-                return;
+                // Built-in Render Pipeline approach
+                RenderSettings.defaultReflectionMode = UnityEngine.Rendering.DefaultReflectionMode.Custom;
+                RenderSettings.customReflectionTexture = randomSkyboxCubemap;
+                RenderSettings.reflectionIntensity = Random.Range(1.0f, 3.0f);
+            }
+            catch (System.Exception reflectionError) 
+            {
+                Debug.LogWarning($"Built-in reflection setup failed: {reflectionError.Message}");
             }
             
-            // Try to get the Visual Environment component
-            if (defaultVolumeProfile.TryGet(out UnityEngine.Rendering.HighDefinition.VisualEnvironment visualEnvironment))
+            // URP-specific environment setup (simplified)
+            try
             {
-                // Set sky type to HDRI
-                visualEnvironment.skyType.value = (int)UnityEngine.Rendering.HighDefinition.SkyType.HDRI;
+                // Set the environment map for URP materials
+                Shader.SetGlobalTexture("unity_SpecCube0", randomSkyboxCubemap);
                 
-                // Try to get the HDRI Sky component
-                if (defaultVolumeProfile.TryGet(out UnityEngine.Rendering.HighDefinition.HDRISky hdriSky))
-                {
-                    if (skyboxCubemaps.Count > 0)
-                    {
-                        // Set random HDRI cubemap
-                        Cubemap randomSkyboxCubemap = skyboxCubemaps[Random.Range(0, skyboxCubemaps.Count)];
-                        hdriSky.hdriSky.value = randomSkyboxCubemap;
-                        hdriSky.rotation.value = rotation;
-                        hdriSky.exposure.value = 1f;
-                        hdriSky.multiplier.value = 1f;
-                        
-                        Debug.Log($"Applied HDRP HDRI skybox: {randomSkyboxCubemap.name} with rotation: {rotation}°");
-                    }
-                    else
-                    {
-                        Debug.LogWarning("No HDRI cubemaps available for HDRP skybox");
-                    }
-                }
-                else
-                {
-                    Debug.LogWarning("Could not find HDRISky component in Default Settings Volume Profile");
-                }
+                // Alternative URP environment map setup
+                Shader.SetGlobalTexture("_EnvironmentMap", randomSkyboxCubemap);
+                
+                // Force shader to update environment map
+                Shader.SetGlobalFloat("_EnvironmentMapHDR", 1.0f);
             }
-            else
+            catch (System.Exception urpError)
             {
-                Debug.LogWarning("Could not find Visual Environment component in Default Settings Volume Profile");
+                Debug.LogWarning($"URP reflection setup failed: {urpError.Message}");
             }
+            
+            Debug.Log($"Applied skybox with rotation: {rotation}, cubemap: {randomSkyboxCubemap.name}");
         }
         catch (System.Exception e)
         {
-            Debug.LogWarning($"Error applying HDRP skybox: {e.Message}");
+            Debug.LogError($"Error applying skybox: {e.Message}");
         }
     }
     
-   
-    
-    void ApplyRandomMaterialsWithLogos()
+    void ApplyRandomMaterialsWithLogos(bool isCardBack)
     {
-        if (frontMaterial == null) return;
+        if (frontMaterial == null) 
+        {
+            Debug.LogError("Front material is null!");
+            return;
+        }
         
-        // Create one final texture for the front face only
         if (frontTextures.Count > 0)
         {
-            // Get random front texture
             Texture2D randomFrontTexture = frontTextures[Random.Range(0, frontTextures.Count)];
             
-            // Blend with random color
             Color randomColor = cardColors[Random.Range(0, cardColors.Count)];
             float blendAmount = Random.Range(minColorBlend, maxColorBlend);
+            if (isCardBack) {
+                blendAmount = 1.0f;
+                randomColor *= 0.5f;
+            }
             Texture2D blendedTexture = BlendTextureWithColor(randomFrontTexture, randomColor, blendAmount);
             
-            // Add chip, brand logo, and bank logo to the texture
-            Texture2D finalTexture = AddLogosToTexture(blendedTexture);
+            Texture2D finalTexture = AddLogosToTexture(blendedTexture, isCardBack);
             
-            // Apply the final texture to the front material
             frontMaterial.mainTexture = finalTexture;
             
-            // Ensure sharp rendering
-            //EnsureSharpMaterialRendering(frontMaterial);
-            //AdjustMaterialForExposure(frontMaterial);
+            // Set the background texture as the normal map for realistic surface detail
+            if (frontMaterial.HasProperty("_BumpMap"))
+            {
+                frontMaterial.SetTexture("_BumpMap", randomFrontTexture);
+                Debug.Log($"Set background texture as normal map: {randomFrontTexture.name}");
+            }
+            else if (frontMaterial.HasProperty("_NormalMap"))
+            {
+                frontMaterial.SetTexture("_NormalMap", randomFrontTexture);
+                Debug.Log($"Set background texture as normal map: {randomFrontTexture.name}");
+            }
+            
+            // Make the card background shiny
+            MakeCardShiny(frontMaterial);
+            
+            // Refresh environment map on card material after skybox change
+            RefreshCardEnvironmentMap(frontMaterial);
+        }
+        else
+        {
+            Debug.LogWarning("No front textures available!");
         }
     }
     
-    void EnsureSharpMaterialRendering(Material material)
+    void RefreshCardEnvironmentMap(Material cardMaterial)
     {
-        if (material == null || material.mainTexture == null) return;
+        if (cardMaterial == null) return;
         
-        // Set texture filtering to point for sharp rendering
-        material.mainTexture.filterMode = FilterMode.Bilinear;
-        material.mainTexture.wrapMode = TextureWrapMode.Clamp;
-        
-        // Disable any material properties that might cause blur
-        if (material.HasProperty("_Smoothness"))
+        // Get the current skybox cubemap
+        if (RenderSettings.skybox != null && RenderSettings.skybox.HasProperty("_Tex"))
         {
-            material.SetFloat("_Smoothness", 0.0f); // No smoothness to prevent blur
-        }
-        
-        if (material.HasProperty("_Metallic"))
-        {
-            material.SetFloat("_Metallic", 0.0f); // No metallic to prevent reflections
-        }
-        
-        // Ensure no emission that might cause bloom
-        if (material.HasProperty("_EmissionColor"))
-        {
-            material.SetColor("_EmissionColor", Color.black);
+            Cubemap skyboxCubemap = RenderSettings.skybox.GetTexture("_Tex") as Cubemap;
+            if (skyboxCubemap != null)
+            {
+                // Set environment map directly on card material
+                if (cardMaterial.HasProperty("_EnvironmentMap"))
+                {
+                    cardMaterial.SetTexture("_EnvironmentMap", skyboxCubemap);
+                }
+                
+                // Alternative environment map property
+                if (cardMaterial.HasProperty("unity_SpecCube0"))
+                {
+                    cardMaterial.SetTexture("unity_SpecCube0", skyboxCubemap);
+                }
+                
+                // Force material to update
+                cardMaterial.SetPass(0);
+                
+                Debug.Log($"Refreshed environment map on card material: {skyboxCubemap.name}");
+            }
         }
     }
     
-    void AdjustMaterialForExposure(Material material)
+    void MakeCardShiny(Material material)
     {
         if (material == null) return;
         
-        try
+        Debug.Log($"Making card shiny. Material: {material.name}, Shader: {material.shader.name}");
+        
+        // URP Lit specific properties for shiny, metallic, plasticky appearance
+        
+        // Very high smoothness for maximum reflectivity
+        if (material.HasProperty("_Smoothness"))
         {
-            // HDRP material properties
-            if (material.HasProperty("_BaseColor"))
-            {
-                Color baseColor = material.GetColor("_BaseColor");
-                // Reduce brightness to prevent overexposure
-                baseColor *= Mathf.Clamp(exposure, 0.1f, 1.0f);
-                material.SetColor("_BaseColor", baseColor);
-            }
-            
-            if (material.HasProperty("_Metallic"))
-            {
-                material.SetFloat("_Metallic", 0.0f); // No metallic to prevent reflections
-            }
-            
-            if (material.HasProperty("_Smoothness"))
-            {
-                material.SetFloat("_Smoothness", 0.0f); // No smoothness to prevent blur
-            }
-            
-            if (material.HasProperty("_EmissionColor"))
-            {
-                material.SetColor("_EmissionColor", Color.black); // No emission
-            }
-            
-            // Additional HDRP properties to prevent overexposure
-            if (material.HasProperty("_EmissiveColor"))
-            {
-                material.SetColor("_EmissiveColor", Color.black);
-            }
-            
-            if (material.HasProperty("_EmissiveIntensity"))
-            {
-                material.SetFloat("_EmissiveIntensity", 0.0f);
-            }
-            
-            // HDRP-specific material properties
-            if (material.HasProperty("_SpecularOcclusionFromAO"))
-            {
-                material.SetFloat("_SpecularOcclusionFromAO", 0.0f);
-            }
-            
-            if (material.HasProperty("_SpecularAAScreenSpaceVariance"))
-            {
-                material.SetFloat("_SpecularAAScreenSpaceVariance", 0.0f);
-            }
-            
-            if (material.HasProperty("_SpecularAAThreshold"))
-            {
-                material.SetFloat("_SpecularAAThreshold", 0.0f);
-            }
-            
-            Debug.Log("Applied HDRP material optimizations");
+            float smoothness = Random.Range(0.95f, 1.0f); // Increased from 0.85-0.95 to 0.95-1.0
+            material.SetFloat("_Smoothness", smoothness);
+            Debug.Log($"Set _Smoothness to: {smoothness}");
         }
-        catch (System.Exception e)
+        else
         {
-            Debug.LogWarning($"Could not adjust HDRP material properties: {e.Message}");
+            Debug.LogWarning("Material does not have _Smoothness property");
         }
+        
+        // Higher metallic for stronger reflections
+        if (material.HasProperty("_Metallic"))
+        {
+            float metallic = Random.Range(0.0f, 1.0f); // Increased from 0.1-0.3 to 0.4-0.8
+            material.SetFloat("_Metallic", metallic);
+            Debug.Log($"Set _Metallic to: {metallic}");
+        }
+        else
+        {
+            Debug.LogWarning("Material does not have _Metallic property");
+        }
+        
+        // Normal map strength for subtle surface detail
+        if (material.HasProperty("_BumpScale"))
+        {
+            float bumpScale = Random.Range(0.5f, 0.9f); // Reduced for smoother reflections
+            material.SetFloat("_BumpScale", bumpScale);
+            Debug.Log($"Set _BumpScale to: {bumpScale}");
+        }
+        else
+        {
+            Debug.LogWarning("Material does not have _BumpScale property");
+        }
+        
+        // Emission for subtle glow (credit cards often have a slight glow)
+        // if (material.HasProperty("_EmissionColor"))
+        // {
+        //     Color emissionColor = Color.white * Random.Range(0.05f, 0.1f);
+        //     material.SetColor("_EmissionColor", emissionColor);
+        //     material.EnableKeyword("_EMISSION");
+        //     Debug.Log($"Set _EmissionColor to: {emissionColor}");
+        // }
+        // else
+        // {
+        //     Debug.LogWarning("Material does not have _EmissionColor property");
+        // }
+        
+        // Ambient occlusion strength for better depth
+        // if (material.HasProperty("_OcclusionStrength"))
+        // {
+        //     float occlusionStrength = Random.Range(0.6f, 0.8f); // Back to previous value
+        //     material.SetFloat("_OcclusionStrength", occlusionStrength);
+        //     Debug.Log($"Set _OcclusionStrength to: {occlusionStrength}");
+        // }
+        // else
+        // {
+        //     Debug.LogWarning("Material does not have _OcclusionStrength property");
+        // }
+        
+        // URP Lit specific - Specular highlights (crucial for reflections)
+        if (material.HasProperty("_SpecularHighlights"))
+        {
+            material.EnableKeyword("_SPECULARHIGHLIGHTS_ON");
+            Debug.Log("Enabled _SPECULARHIGHLIGHTS_ON keyword");
+        }
+        else
+        {
+            Debug.LogWarning("Material does not have _SpecularHighlights property");
+        }
+        
+        // URP Lit specific - Environment reflections (this is key for skybox reflection)
+        if (material.HasProperty("_EnvironmentReflections"))
+        {
+            material.EnableKeyword("_ENVIRONMENTREFLECTIONS_ON");
+            Debug.Log("Enabled _ENVIRONMENTREFLECTIONS_ON keyword");
+        }
+        else
+        {
+            Debug.LogWarning("Material does not have _EnvironmentReflections property");
+        }
+        
+        // Additional URP reflection properties
+        if (material.HasProperty("_ReflectionProbeUsage"))
+        {
+            material.SetFloat("_ReflectionProbeUsage", 1.0f); // Use reflection probes
+            Debug.Log("Set _ReflectionProbeUsage to 1.0");
+        }
+        
+        // Ensure environment map is properly set
+        if (material.HasProperty("_EnvironmentMap"))
+        {
+            // This will be set by the skybox setup
+            Debug.Log("Material has _EnvironmentMap property");
+        }
+        
+        // Force material to refresh environment reflections
+        material.SetFloat("_EnvironmentReflections", 1.0f);
+        
+        // Try to set environment map directly on card material
+        if (material.HasProperty("_EnvironmentMap"))
+        {
+            // Get the current skybox cubemap
+            if (RenderSettings.skybox != null && RenderSettings.skybox.HasProperty("_Tex"))
+            {
+                Cubemap skyboxCubemap = RenderSettings.skybox.GetTexture("_Tex") as Cubemap;
+                if (skyboxCubemap != null)
+                {
+                    material.SetTexture("_EnvironmentMap", skyboxCubemap);
+                    Debug.Log($"Set environment map directly on card material: {skyboxCubemap.name}");
+                }
+            }
+        }
+        
+        // Alternative environment map property names for card material
+        if (material.HasProperty("unity_SpecCube0"))
+        {
+            if (RenderSettings.skybox != null && RenderSettings.skybox.HasProperty("_Tex"))
+            {
+                Cubemap skyboxCubemap = RenderSettings.skybox.GetTexture("_Tex") as Cubemap;
+                if (skyboxCubemap != null)
+                {
+                    material.SetTexture("unity_SpecCube0", skyboxCubemap);
+                    Debug.Log($"Set unity_SpecCube0 on card material: {skyboxCubemap.name}");
+                }
+            }
+        }
+        
+        // Set render queue for proper rendering
+        material.renderQueue = 2000;
+        
+        // Ensure proper shader keywords for URP Lit
+        material.EnableKeyword("_RECEIVE_SHADOWS_ON");
+        material.EnableKeyword("_MAIN_LIGHT_SHADOWS");
+        material.EnableKeyword("_MAIN_LIGHT_SHADOWS_CASCADE");
+        
+        // Additional URP keywords for better reflections
+        material.EnableKeyword("_ADDITIONAL_LIGHTS");
+        material.EnableKeyword("_ADDITIONAL_LIGHT_SHADOWS");
+        
+        // Force material to update
+        material.SetPass(0);
+        
+        Debug.Log("Finished making card shiny with enhanced contrast and reflection support");
     }
+    
     
     Texture2D BlendTextureWithColor(Texture2D sourceTexture, Color blendColor, float blendAmount)
     {
@@ -996,10 +1075,8 @@ public class Synthesize : MonoBehaviour
         return result;
     }
     
-    Texture2D AddLogosToTexture(Texture2D baseTexture)
+    Texture2D AddLogosToTexture(Texture2D baseTexture, bool isCardBack)
     {
-        bool isCardBack = Random.Range(0f, 1f) < 0.5f;
-
         Texture2D result = GetPooledTexture(baseTexture.width, baseTexture.height);
         
         // Copy base texture using GetPixels32 for better performance
@@ -1012,32 +1089,38 @@ public class Synthesize : MonoBehaviour
         {
             Texture2D chipTexture = chipTextures[Random.Range(0, chipTextures.Count)];
             Vector2 chipCenter = CalculateChipPosition();
-            AddLogoToTexture(result, chipTexture, chipCenter, chipSizeRatio, chipOpacity);
-            Debug.Log($"Chip: {chipTexture.name} - Center: {chipCenter}, MaxWidth: {chipSizeRatio}");
+            AddLogoToTexture(result, chipTexture, chipCenter, chipSize, chipOpacity);
         }
         
         // Add brand logo (independent of chip)
-        if (logoTextures.Count > 0 && !isCardBack)
+        if (logoTextures.Count > 0)
         {
             Texture2D brandLogoTexture = logoTextures[Random.Range(0, logoTextures.Count)];
             Vector2 brandLogoCenter = new Vector2(1.0f, -1.0f); // Bottom right corner
-            AddLogoToTexture(result, brandLogoTexture, brandLogoCenter, brandLogoSizeRatio, brandLogoOpacity);
-            Debug.Log($"Brand Logo: {brandLogoTexture.name} - Center: {brandLogoCenter}, MaxWidth: {brandLogoSizeRatio}");
+            AddLogoToTexture(result, brandLogoTexture, brandLogoCenter, brandLogoSize, brandLogoOpacity);
         }
         
         // Add bank logo (independent of chip)
-        if (bankLogoTextures.Count > 0 && !isCardBack)
+        if (bankLogoTextures.Count > 0)
         {
             Texture2D bankLogoTexture = bankLogoTextures[Random.Range(0, bankLogoTextures.Count)];
             Vector2 bankLogoCenter = new Vector2(1.0f, 1.0f); // Upper right corner
-            AddLogoToTexture(result, bankLogoTexture, bankLogoCenter, bankLogoSizeRatio, bankLogoOpacity);
-            Debug.Log($"Bank Logo: {bankLogoTexture.name} - Center: {bankLogoCenter}, MaxWidth: {bankLogoSizeRatio}");
+            if (isCardBack) {
+                bankLogoCenter = new Vector2(-1.0f, -1.0f); // Bottom left corner
+            }
+            AddLogoToTexture(result, bankLogoTexture, bankLogoCenter, bankLogoSize, bankLogoOpacity);
         }
         
-        // Randomly add magnetic stripe
-        if (useMagneticStripe && isCardBack)
+        // Add magnetic stripe to back of card
+        if (isCardBack) // Only add magnetic stripe to back of card
         {
             AddMagneticStripeToTexture(result);
+            
+            // Add signature below the magnetic stripe
+            if (signatureTexture != null)
+            {
+                AddSignatureToTexture(result);
+            }
         }
         
         result.Apply();
@@ -1052,15 +1135,15 @@ public class Synthesize : MonoBehaviour
             (center.y + 1f) * 0.5f
         );
 
-        Debug.Log($"targetTexture.width: {targetTexture.width}, targetTexture.height: {targetTexture.height}");
-        Debug.Log($"logoTexture.width: {logoTexture.width}, logoTexture.height: {logoTexture.height}");
-        
+        int logoWidth = 0;
+        int logoHeight = 0;
+
         // Calculate logo dimensions in pixels
         // maxWidth is a percentage of the card width (0.0 to 1.0)
-        int logoWidth = (int)(maxWidth * targetTexture.width);
-        int logoHeight = (int)(logoWidth * ((float)logoTexture.height / logoTexture.width)); // Preserve aspect ratio
         
-        Debug.Log($"Calculated logo size: {logoWidth}x{logoHeight} pixels");
+        logoWidth = (int)(maxWidth * targetTexture.width);
+        logoHeight = (int)(logoWidth * ((float)logoTexture.height / logoTexture.width)); // Preserve aspect ratio
+   
         
         // Calculate start position in texture coordinates (center-based)
         int startX = (int)(textureCenter.x * targetTexture.width - logoWidth * 0.5f);
@@ -1072,8 +1155,6 @@ public class Synthesize : MonoBehaviour
         int paddingY = Mathf.RoundToInt(logoPadding * targetTexture.height);
         startX = Mathf.Clamp(startX, paddingX, targetTexture.width - logoWidth - paddingX);
         startY = Mathf.Clamp(startY, paddingY, targetTexture.height - logoHeight - paddingY);
-        
-        Debug.Log($"Logo position: ({startX}, {startY})");
         
         // Fast GPU-accelerated blending using RenderTexture
         BlendLogoFast(targetTexture, logoTexture, startX, startY, logoWidth, logoHeight, opacity);
@@ -1122,14 +1203,22 @@ public class Synthesize : MonoBehaviour
     
     void AddMagneticStripeToTexture(Texture2D targetTexture)
     {
-        if (magneticStripeGenerator == null) return;
+        if (magneticStripeGenerator == null) 
+        {
+            Debug.LogWarning("Magnetic stripe generator is null!");
+            return;
+        }
         
         try
         {
-            // Generate magnetic stripe texture
             Texture2D stripeTexture = magneticStripeGenerator.GenerateMagneticStripe(targetTexture.width, targetTexture.height);
             
-            // Blend stripe onto target texture
+            if (stripeTexture == null)
+            {
+                Debug.LogError("Failed to generate magnetic stripe texture!");
+                return;
+            }
+            
             for (int x = 0; x < targetTexture.width; x++)
             {
                 for (int y = 0; y < targetTexture.height; y++)
@@ -1137,25 +1226,66 @@ public class Synthesize : MonoBehaviour
                     Color targetColor = targetTexture.GetPixel(x, y);
                     Color stripeColor = stripeTexture.GetPixel(x, y);
                     
-                    // Blend based on stripe alpha
-                    float alpha = 1.0f;// stripeColor.a * magneticStripeGenerator.stripeOpacity;
+                    float alpha = stripeColor.a;
                     Color blendedColor = Color.Lerp(targetColor, stripeColor, alpha);
                     
                     targetTexture.SetPixel(x, y, blendedColor);
                 }
             }
             
-            // Clean up the generated stripe texture
             DestroyImmediate(stripeTexture);
-            
-            Debug.Log("Added magnetic stripe to texture");
         }
         catch (System.Exception e)
         {
-            Debug.LogWarning($"Could not add magnetic stripe: {e.Message}");
+            Debug.LogError($"Could not add magnetic stripe: {e.Message}");
         }
     }
     
+    void AddSignatureToTexture(Texture2D targetTexture)
+    {
+        if (signatureTexture == null)
+        {
+            Debug.LogWarning("Signature texture is null!");
+            return;
+        }
+
+        // Calculate signature position
+        Vector2 signatureCenter = new Vector2(0.0f, 0.25f); // Position it at the bottom center of the card
+        Vector2 textureCenter = new Vector2(
+            (signatureCenter.x + 1f) * 0.5f,
+            (signatureCenter.y + 1f) * 0.5f
+        );
+
+        int signatureWidth = 0;
+        int signatureHeight = 0;
+
+        // Calculate signature dimensions in pixels - increased size
+        if (signatureTexture.isReadable)
+        {
+            // Use a larger percentage of card width for signature
+            float signatureSizeRatio = 0.5f; // 50% of card width instead of 10%
+            signatureWidth = (int)(signatureSizeRatio * targetTexture.width);
+            signatureHeight = (int)(signatureWidth * ((float)signatureTexture.height / signatureTexture.width)); // Preserve aspect ratio
+        }
+        else
+        {
+            Debug.LogWarning("Signature texture is not readable. Cannot add signature.");
+            return;
+        }
+        
+        // Calculate start position in texture coordinates (center-based)
+        int startX = (int)(textureCenter.x * targetTexture.width - signatureWidth * 0.5f);
+        int startY = (int)(textureCenter.y * targetTexture.height - signatureHeight * 0.5f);
+        
+        // Ensure we don't go out of bounds
+        int paddingX = Mathf.RoundToInt(logoPadding * targetTexture.width);
+        int paddingY = Mathf.RoundToInt(logoPadding * targetTexture.height);
+        startX = Mathf.Clamp(startX, paddingX, targetTexture.width - signatureWidth - paddingX);
+        startY = Mathf.Clamp(startY, paddingY, targetTexture.height - signatureHeight - paddingY);
+
+        // Fast GPU-accelerated blending using RenderTexture
+        BlendLogoFast(targetTexture, signatureTexture, startX, startY, signatureWidth, signatureHeight, 1.0f);
+    }
     
     System.Collections.IEnumerator CaptureAndSave()
     {
@@ -1163,14 +1293,14 @@ public class Synthesize : MonoBehaviour
         yield return new WaitForEndOfFrame();
         
         // Set camera target texture
-        renderCamera.targetTexture = renderTexture;
+        mainCamera.targetTexture = renderTexture;
         
         // Render the scene
-        renderCamera.Render(); 
+        mainCamera.Render(); 
         
         // Read pixels from render texture
         RenderTexture.active = renderTexture;
-        captureTexture.ReadPixels(new Rect(0, 0, imageWidth, imageHeight), 0, 0);
+        captureTexture.ReadPixels(new Rect(0, 0, 1024, 1024), 0, 0);
         captureTexture.Apply();
         RenderTexture.active = null;
         
@@ -1179,15 +1309,13 @@ public class Synthesize : MonoBehaviour
         captureTexture.wrapMode = TextureWrapMode.Clamp;
         
         // Save the image with maximum quality
-        string filename = $"credit_card_{currentImageIndex:D4}.png";
+        string filename = $"credit_card_{currentImageCount:D4}.png";
         string filepath = Path.Combine("SyntheticCreditCardData", filename);
         
         byte[] imageData = captureTexture.EncodeToPNG();
         File.WriteAllBytes(filepath, imageData);
         
-        Debug.Log($"Saved sharp image: {filepath}");
-        
-        currentImageIndex++;
+        currentImageCount++;
         
         // Generate next card
         GenerateNextCard();
@@ -1195,59 +1323,12 @@ public class Synthesize : MonoBehaviour
     
     void OnDestroy()
     {
-        if (renderTexture != null)
-        {
-            renderTexture.Release();
-        }
         
-        if (captureTexture != null)
-        {
-            DestroyImmediate(captureTexture);
-        }
-        
-        // Clean up readable textures
-        CleanupReadableTextures();
-        
-        // Clean up texture pool
-        CleanupTexturePool();
-        
-        // Clean up added elements
-        foreach (GameObject element in addedElements)
-        {
-            if (element != null)
-            {
-                DestroyImmediate(element);
-            }
-        }
-        addedElements.Clear();
     }
     
     void CleanupReadableTextures()
     {
-        // Clean up all readable textures we created
-        var allTextureLists = new List<Texture2D>[] { frontTextures, chipTextures, logoTextures, bankLogoTextures, skyboxTextures };
         
-        foreach (var textureList in allTextureLists)
-        {
-            foreach (Texture2D texture in textureList)
-            {
-                if (texture != null)
-                {
-                    DestroyImmediate(texture);
-                }
-            }
-            textureList.Clear();
-        }
-        
-        // Clean up cubemaps
-        foreach (Cubemap cubemap in skyboxCubemaps)
-        {
-            if (cubemap != null)
-            {
-                DestroyImmediate(cubemap);
-            }
-        }
-        skyboxCubemaps.Clear();
     }
     
     // Performance optimization: Texture pooling methods
@@ -1295,6 +1376,24 @@ public class Synthesize : MonoBehaviour
         }
     }
     
+    void CleanupCorruptedFontAssets()
+    {
+        if (!Directory.Exists(cardFontsFolder))
+            return;
+            
+        string[] assetFiles = Directory.GetFiles(cardFontsFolder, "*.asset");
+        foreach (string assetFile in assetFiles)
+        {
+            TMPro.TMP_FontAsset fontAsset = UnityEditor.AssetDatabase.LoadAssetAtPath<TMPro.TMP_FontAsset>(assetFile);
+            if (fontAsset != null && fontAsset.atlasTexture == null)
+            {
+                // Debug.LogWarning($"Removing corrupted font asset: {fontAsset.name}");
+                UnityEditor.AssetDatabase.DeleteAsset(assetFile);
+            }
+        }
+        UnityEditor.AssetDatabase.Refresh();
+    }
+    
     // Public method to trigger generation from UI
     public void StartGeneration()
     {
@@ -1304,7 +1403,7 @@ public class Synthesize : MonoBehaviour
     // Public method to set number of images to generate
     public void SetImageCount(int count)
     {
-        imagesToGenerate = count;
+        numberOfImages = count;
     }
     
     // Public method to manually test skybox changes
@@ -1314,62 +1413,22 @@ public class Synthesize : MonoBehaviour
     }
     
     // Public method to scale card to standard dimensions
-    // public void ScaleCardToStandardDimensions()
-    // {
-    //     if (cardModel == null) return;
-        
-        
-    //     // Convert inches to Unity units (1 inch = 0.0254 meters)
-    //     float widthMeters = cardWidthInches * 0.0254f;
-    //     float heightMeters = cardHeightInches * 0.0254f;
-    //     float thicknessMeters = cardThicknessInches * 0.0254f;
-        
-    //     // Get the current bounds of the card model
-    //     Renderer cardRenderer = cardModel.GetComponent<Renderer>();
-    //     if (cardRenderer != null)
-    //     {
-    //         Bounds currentBounds = cardRenderer.bounds;
-            
-    //         // Calculate scale factors
-    //         float scaleX = widthMeters / currentBounds.size.x;
-    //         float scaleY = heightMeters / currentBounds.size.y;
-    //         float scaleZ = thicknessMeters / currentBounds.size.z;
-            
-    //         // Apply uniform scaling (use the smallest scale to maintain proportions)
-    //         float uniformScale = Mathf.Min(scaleX, scaleY, scaleZ);
-            
-    //         // Apply scaling
-    //         //cardModel.transform.localScale = Vector3.one * uniformScale * 500.0f;
-            
-    //         Debug.Log($"Scaled card to {cardWidthInches}\" × {cardHeightInches}\" × {cardThicknessInches}\" (scale: {uniformScale:F3})");
-    //     }
-    //     else
-    //     {
-    //         // Fallback: apply estimated scaling based on typical card proportions
-    //         float estimatedScale = widthMeters / 0.0856f; // 3.375 inches = 0.0856 meters
-    //         //cardModel.transform.localScale = Vector3.one * estimatedScale;
-
-            
-            
-    //         Debug.Log($"Applied estimated card scaling (scale: {estimatedScale:F3})");
-    //     }
-    // }
 
     // Calculate EMV chip position based on real-world specifications
     Vector2 CalculateChipPosition()
     {
         // Real-world specifications from the technical diagram:
         // Card dimensions: 3.37" x 2.125"
-        // Chip dimensions: 0.85" x 0.71"
-        // Chip position from left edge: 0.34"
-        // Chip position from top edge: 0.46"
+        // Chip dimensions: 0.4591" x 0.3692"
+        // Chip position from left edge: 3/8" (0.375")
+        // Chip position from top edge: 11/16" (0.6875")
         
         float cardWidth = 3.37f;
         float cardHeight = 2.125f;
-        float chipWidth = 0.85f;
-        float chipHeight = 0.71f;
-        float chipLeftEdge = 0.34f;
-        float chipTopEdge = 0.46f;
+        float chipLeftEdge = 0.375f;
+        float chipTopEdge = 0.6875f;
+        float chipWidth = 0.4591f;
+        float chipHeight = 0.3692f;
         
         // Calculate chip center position in inches
         float chipCenterX = chipLeftEdge + (chipWidth / 2f);
@@ -1381,4 +1440,360 @@ public class Synthesize : MonoBehaviour
         
         return new Vector2(normalizedX, normalizedY);
     }
+
+    Color GenerateRandomTextColor()
+    {
+        return textColorOptions[Random.Range(0, textColorOptions.Count)];
+    }
+    
+    Color GenerateChromeReflectionColor(Color baseColor)
+    {
+        if (!useChromeReflection)
+        {
+            return baseColor;
+        }
+        
+        // Create chrome effect with metallic reflection
+        float reflection = Random.Range(0.5f, chromeReflectionIntensity);
+        float metallic = Random.Range(0.7f, 1.0f);
+        float saturation = Random.Range(1.0f, 1.5f);
+        
+        // Convert to HSV for better color manipulation
+        Color.RGBToHSV(baseColor, out float h, out float s, out float v);
+        
+        // Enhance saturation for metallic look
+        s = Mathf.Clamp01(s * saturation);
+        
+        // Add metallic brightness and reflection
+        v = Mathf.Clamp01(v + reflection * metallic);
+        
+        // Convert back to RGB
+        Color chromeColor = Color.HSVToRGB(h, s, v);
+        
+        // Add metallic tint based on reflection angle
+        float tintStrength = Random.Range(0.2f, 0.4f);
+        Color metallicTint = new Color(
+            Random.Range(0.9f, 1.1f), // Slight red variation
+            Random.Range(0.9f, 1.1f), // Slight green variation  
+            Random.Range(1.0f, 1.3f), // Enhanced blue for metallic look
+            1f
+        );
+        
+        // Apply metallic tint
+        chromeColor = new Color(
+            Mathf.Clamp01(chromeColor.r * metallicTint.r * (1f - tintStrength) + metallicTint.r * tintStrength),
+            Mathf.Clamp01(chromeColor.g * metallicTint.g * (1f - tintStrength) + metallicTint.g * tintStrength),
+            Mathf.Clamp01(chromeColor.b * metallicTint.b * (1f - tintStrength) + metallicTint.b * tintStrength),
+            chromeColor.a
+        );
+        
+        // Add final brightness boost for chrome effect
+        chromeColor = new Color(
+            Mathf.Clamp01(chromeColor.r * 1.2f),
+            Mathf.Clamp01(chromeColor.g * 1.2f),
+            Mathf.Clamp01(chromeColor.b * 1.3f), // Slightly more blue for metallic look
+            chromeColor.a
+        );
+        
+        return chromeColor;
+    }
+    
+    void ApplyTextEffects(TMPro.TextMeshPro textMesh, Color textColor)
+    {
+        if (textMesh == null) return;
+        
+        // Apply chrome effect to the text color
+        Color chromeColor = GenerateChromeReflectionColor(textColor);
+        textMesh.color = chromeColor;
+        
+        // Apply gradient chrome effect
+        ApplyGradientChromeEffect(textMesh, chromeColor);
+        
+        // Add metallic properties if the material supports them
+        if (textMesh.fontSharedMaterial.HasProperty("_Metallic"))
+        {
+            textMesh.fontSharedMaterial.SetFloat("_Metallic", Random.Range(0.7f, 1.0f));
+        }
+        
+        if (textMesh.fontSharedMaterial.HasProperty("_Smoothness"))
+        {
+            textMesh.fontSharedMaterial.SetFloat("_Smoothness", Random.Range(0.8f, 1.0f));
+        }
+        
+        // Try to enable glow effect if supported
+        if (textMesh.fontSharedMaterial.HasProperty("_GlowPower"))
+        {
+            textMesh.fontSharedMaterial.SetFloat("_GlowPower", Random.Range(0.1f, 0.3f));
+        }
+        
+        if (textMesh.fontSharedMaterial.HasProperty("_GlowColor"))
+        {
+            textMesh.fontSharedMaterial.SetColor("_GlowColor", chromeColor * 0.5f);
+        }
+        
+        // Add embossing effects to text
+        ApplyEmbossedTextEffect(textMesh, textColor);
+        
+        // Add environment reflection support to text material
+        AddEnvironmentReflectionsToText(textMesh);
+    }
+    
+    void ApplyEmbossedTextEffect(TMPro.TextMeshPro textMesh, Color textColor)
+    {
+        if (textMesh.fontSharedMaterial == null) return;
+        
+        Material textMaterial = textMesh.fontSharedMaterial;
+        
+        // Enable outline for embossed effect
+        if (textMaterial.HasProperty("_OutlineColor"))
+        {
+            // Create embossed outline color (darker version of text color)
+            Color embossColor = textColor * 0.3f; // Darker outline
+            textMaterial.SetColor("_OutlineColor", embossColor);
+            
+            // Set outline width for embossed appearance
+            if (textMaterial.HasProperty("_OutlineWidth"))
+            {
+                float outlineWidth = Random.Range(0.02f, 0.05f);
+                textMaterial.SetFloat("_OutlineWidth", outlineWidth);
+            }
+            
+            // Enable outline
+            textMaterial.EnableKeyword("_OUTLINE_ON");
+        }
+        
+        // Add shadow for depth effect
+        if (textMaterial.HasProperty("_ShadowColor"))
+        {
+            // Create shadow color (very dark version of text color)
+            Color shadowColor = textColor * 0.1f;
+            shadowColor.a = 0.8f; // Semi-transparent shadow
+            textMaterial.SetColor("_ShadowColor", shadowColor);
+            
+            // Set shadow offset for embossed depth
+            if (textMaterial.HasProperty("_ShadowOffset"))
+            {
+                Vector2 shadowOffset = new Vector2(
+                    Random.Range(0.01f, 0.03f),
+                    Random.Range(-0.03f, -0.01f) // Negative Y for shadow below
+                );
+                textMaterial.SetVector("_ShadowOffset", shadowOffset);
+            }
+            
+            // Enable shadow
+            textMaterial.EnableKeyword("_SHADOW_ON");
+        }
+        
+        // Add depth effect through face color variation
+        if (textMaterial.HasProperty("_FaceColor"))
+        {
+            // Slightly lighter face color for embossed effect
+            Color faceColor = textColor * 1.2f;
+            faceColor.a = textColor.a;
+            textMaterial.SetColor("_FaceColor", faceColor);
+        }
+        else if (textMaterial.HasProperty("_BaseColor"))
+        {
+            // URP TextMeshPro uses _BaseColor
+            Color baseColor = textColor * 1.2f;
+            baseColor.a = textColor.a;
+            textMaterial.SetColor("_BaseColor", baseColor);
+        }
+        
+        // Add subtle glow for embossed highlight
+        if (textMaterial.HasProperty("_GlowPower") && !textMaterial.HasProperty("_GlowColor"))
+        {
+            textMaterial.SetFloat("_GlowPower", Random.Range(0.05f, 0.15f));
+        }
+        
+        if (textMaterial.HasProperty("_GlowColor") && !textMaterial.HasProperty("_GlowPower"))
+        {
+            // Subtle glow color for embossed highlight
+            Color glowColor = textColor * 0.3f;
+            textMaterial.SetColor("_GlowColor", glowColor);
+        }
+        
+        Debug.Log($"Applied embossed text effect to: {textMesh.text}");
+    }
+    
+    void AddEnvironmentReflectionsToText(TMPro.TextMeshPro textMesh)
+    {
+        if (textMesh.fontSharedMaterial == null) return;
+        
+        Material textMaterial = textMesh.fontSharedMaterial;
+        
+        // Enable environment reflections for text
+        if (textMaterial.HasProperty("_EnvironmentReflections"))
+        {
+            textMaterial.EnableKeyword("_ENVIRONMENTREFLECTIONS_ON");
+            textMaterial.SetFloat("_EnvironmentReflections", 1.0f);
+        }
+        
+        // Enable specular highlights for text
+        if (textMaterial.HasProperty("_SpecularHighlights"))
+        {
+            textMaterial.EnableKeyword("_SPECULARHIGHLIGHTS_ON");
+        }
+        
+        // Set metallic properties for text to enable reflections
+        if (textMaterial.HasProperty("_Metallic"))
+        {
+            // Only set if not already set by chrome effects
+            if (!useChromeReflection)
+            {
+                textMaterial.SetFloat("_Metallic", Random.Range(0.3f, 0.6f));
+            }
+        }
+        
+        // Set smoothness for text to enable reflections
+        if (textMaterial.HasProperty("_Smoothness"))
+        {
+            // Only set if not already set by chrome effects
+            if (!useChromeReflection)
+            {
+                textMaterial.SetFloat("_Smoothness", Random.Range(0.6f, 0.9f));
+            }
+        }
+        
+        // Try to set environment map directly on text material
+        if (textMaterial.HasProperty("_EnvironmentMap"))
+        {
+            // Get the current skybox cubemap
+            if (RenderSettings.skybox != null && RenderSettings.skybox.HasProperty("_Tex"))
+            {
+                Cubemap skyboxCubemap = RenderSettings.skybox.GetTexture("_Tex") as Cubemap;
+                if (skyboxCubemap != null)
+                {
+                    textMaterial.SetTexture("_EnvironmentMap", skyboxCubemap);
+                }
+            }
+        }
+        
+        // Alternative environment map property names
+        if (textMaterial.HasProperty("unity_SpecCube0"))
+        {
+            if (RenderSettings.skybox != null && RenderSettings.skybox.HasProperty("_Tex"))
+            {
+                Cubemap skyboxCubemap = RenderSettings.skybox.GetTexture("_Tex") as Cubemap;
+                if (skyboxCubemap != null)
+                {
+                    textMaterial.SetTexture("unity_SpecCube0", skyboxCubemap);
+                }
+            }
+        }
+        
+        // Set reflection probe usage
+        if (textMaterial.HasProperty("_ReflectionProbeUsage"))
+        {
+            textMaterial.SetFloat("_ReflectionProbeUsage", 1.0f);
+        }
+        
+        // Enable additional URP keywords for text
+        textMaterial.EnableKeyword("_RECEIVE_SHADOWS_ON");
+        textMaterial.EnableKeyword("_MAIN_LIGHT_SHADOWS");
+        textMaterial.EnableKeyword("_MAIN_LIGHT_SHADOWS_CASCADE");
+        
+        // Additional URP keywords for better reflections
+        textMaterial.EnableKeyword("_ADDITIONAL_LIGHTS");
+        textMaterial.EnableKeyword("_ADDITIONAL_LIGHT_SHADOWS");
+        
+        // Force material to update
+        textMaterial.SetPass(0);
+        
+        Debug.Log($"Added environment reflections to text material: {textMaterial.name}");
+    }
+    
+    void ApplyGradientChromeEffect(TMPro.TextMeshPro textMesh, Color baseColor)
+    {
+        // Create a subtle gradient effect by varying the color slightly
+        // This simulates the way chrome reflects light differently across its surface
+        
+        // Generate slight color variations for gradient effect
+        float variation = Random.Range(0.05f, 0.5f);
+        Color gradientColor1 = new Color(
+            Mathf.Clamp01(baseColor.r + variation),
+            Mathf.Clamp01(baseColor.g + variation),
+            Mathf.Clamp01(baseColor.b + variation),
+            baseColor.a
+        );
+        
+        Color gradientColor2 = new Color(
+            Mathf.Clamp01(baseColor.r - variation),
+            Mathf.Clamp01(baseColor.g - variation),
+            Mathf.Clamp01(baseColor.b - variation),
+            baseColor.a
+        );
+        
+        // Apply gradient effect through material properties - URP compatible
+        if (textMesh.fontSharedMaterial.HasProperty("_FaceColor"))
+        {
+            textMesh.fontSharedMaterial.SetColor("_FaceColor", gradientColor1);
+        }
+        else if (textMesh.fontSharedMaterial.HasProperty("_BaseColor"))
+        {
+            // URP TextMeshPro uses _BaseColor instead of _FaceColor
+            textMesh.fontSharedMaterial.SetColor("_BaseColor", gradientColor1);
+        }
+        
+        if (textMesh.fontSharedMaterial.HasProperty("_OutlineColor"))
+        {
+            textMesh.fontSharedMaterial.SetColor("_OutlineColor", gradientColor2);
+            textMesh.fontSharedMaterial.SetFloat("_OutlineWidth", Random.Range(0.01f, 0.03f));
+        }
+    }
+
+
+    void LoadSkyboxCubemaps()
+    {
+        if (!Directory.Exists(skyboxImagesFolder))
+        {
+            Debug.LogWarning($"Skybox folder not found: {skyboxImagesFolder}");
+            return;
+        }
+        
+        // Load cubemap assets from the folder
+        string[] cubemapExtensions = { "*.cubemap" };
+        foreach (string extension in cubemapExtensions)
+        {
+            string[] files = Directory.GetFiles(skyboxImagesFolder, extension);
+            foreach (string file in files)
+            {
+                Cubemap cubemap = UnityEditor.AssetDatabase.LoadAssetAtPath<Cubemap>(file);
+                if (cubemap != null)
+                {
+                    skyboxCubemaps.Add(cubemap);
+                }
+            }
+        }
+        
+        // Also try to load any texture files that might be cubemaps
+        string[] textureExtensions = { "*.png", "*.jpg", "*.jpeg", "*.exr", "*.hdr" };
+        foreach (string extension in textureExtensions)
+        {
+            string[] files = Directory.GetFiles(skyboxImagesFolder, extension);
+            foreach (string file in files)
+            {
+                // Try loading as cubemap first
+                Cubemap cubemap = UnityEditor.AssetDatabase.LoadAssetAtPath<Cubemap>(file);
+                if (cubemap != null)
+                {
+                    skyboxCubemaps.Add(cubemap);
+                }
+                else
+                {
+                    // If not a cubemap, try as texture and check if it's a cubemap texture
+                    Texture2D texture = UnityEditor.AssetDatabase.LoadAssetAtPath<Texture2D>(file);
+                    if (texture != null && texture.dimension == UnityEngine.Rendering.TextureDimension.Cube)
+                    {
+                        // For cubemap textures, we need to create a cubemap from the texture
+                        // This is more complex and might require manual cubemap creation
+                        Debug.Log($"Found cubemap texture: {texture.name}, but manual conversion needed");
+                    }
+                }
+            }
+        }
+        
+    }
+
+    
 }

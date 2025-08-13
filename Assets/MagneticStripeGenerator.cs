@@ -1,7 +1,7 @@
 using UnityEngine;
 using System.Collections.Generic;
 
-public class MagneticStripeGenerator : MonoBehaviour
+public class MagneticStripeGenerator
 {
     [Header("Magnetic Stripe Settings")]
     [Range(0.8f, 1.2f)] public float stripeWidth = 1.0f; // Full width of card
