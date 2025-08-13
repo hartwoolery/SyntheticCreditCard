@@ -6,6 +6,10 @@ using TMPro;
 using UnityEditor;
 using System.Linq; // Added for Concat
 
+using UnityEngine.Rendering;
+using UnityEngine.Rendering.Universal;
+
+
 public class Synthesize : MonoBehaviour
 {
     [Header("Card Model")]
@@ -13,7 +17,8 @@ public class Synthesize : MonoBehaviour
     public Material frontMaterial;
     
     [Header("Camera")]
-    Camera mainCamera;
+    public Camera mainCamera;
+    private Camera screenCamera; // Second camera for screen rendering
     
     [Header("Asset Folders")]
     string frontImagesFolder = "Assets/FrontImages/";
@@ -26,13 +31,12 @@ public class Synthesize : MonoBehaviour
     [Header("Generation Settings")]
     int numberOfImages = 10;
     bool useRandomSkybox = true;
-    bool useChromeReflection = true;
     
     [Header("Randomization")]
     float minCardRotation = -5f;
     float maxCardRotation = 5f;
-    float minColorBlend = 0.0f;
-    float maxColorBlend = 0.4f;
+    float minColorBlend = 0.7f;
+    float maxColorBlend = 1.0f;
     float chipOpacity = 1.0f;
     float brandLogoOpacity = 1.0f;
     float bankLogoOpacity = 1.0f;
@@ -41,7 +45,6 @@ public class Synthesize : MonoBehaviour
     bool pauseOnFocusLoss = false;
     bool continuousGeneration = true;
     float memoryCleanupInterval = 10f;
-    float chromeReflectionIntensity = 0.5f;
     
     [Header("Card Dimensions")]
    
@@ -58,18 +61,7 @@ public class Synthesize : MonoBehaviour
     public GameObject textSetup;
     
     [Header("Card Colors")]
-    List<Color> cardColors = new List<Color>
-    {
-        Color.white,
-        Color.black,
-        Color.gray,
-        Color.blue,
-        Color.red,
-        Color.green,
-        Color.yellow,
-        Color.cyan,
-        Color.magenta
-    };
+   
     
     [Header("Text Colors")]
     List<Color> textColorOptions = new List<Color>
@@ -89,6 +81,7 @@ public class Synthesize : MonoBehaviour
     private RenderTexture renderTexture;
     private Texture2D captureTexture;
     private Texture2D signatureTexture;
+    private Texture2D rfidTexture;
     private bool isGenerating = false;
     private int currentImageCount = 0;
     private float lastMemoryCleanup = 0f;
@@ -96,18 +89,92 @@ public class Synthesize : MonoBehaviour
     private Queue<Texture2D> texturePool = new Queue<Texture2D>();
     private const int MAX_POOL_SIZE = 10;
     
-    // Remove the blend mode field
+    // Add a field to store the current generation's blend mode
     // private string currentGenerationBlendMode = "Alpha";
+    
+    // Track if current card is back or front
+    private bool isCardBack = false;
+    
+    [Header("YOLO Data Settings")]
+    public bool saveYoloData = true;
+    public float trainSplit = 0.7f;
+    public float validSplit = 0.2f;
+    public float testSplit = 0.1f;
+    private int totalImagesGenerated = 0;
+    
+    // YOLO class definitions
+    private readonly Dictionary<string, int> yoloClasses = new Dictionary<string, int>
+    {
+        {"Name", 0},
+        {"Number", 1}, 
+        {"Expires", 2},
+        {"CVC", 3},
+        {"Front", 4},
+        {"Back", 5}
+    };
     
     void Start()
     {
-        InitializeSystem();
-        LoadAssets();
-        SetupCamera();
-        SetupMagneticStripe();
-        SetupRenderTexture();
+        // Clear existing generated data before starting
+        ClearGeneratedFolders();
         
+        // Initialize the system
+        InitializeSystem();
+        
+        // Load all assets
+        LoadAssets();
+        
+        // Setup magnetic stripe generator
+        SetupMagneticStripe();
+        
+        // Setup render texture and camera
+        SetupRenderTexture();
+        SetupCamera();
+        
+        // Load signature texture
+        LoadAdditionalTextures();
+        
+        // Start generating credit cards
         GenerateCreditCards();
+        SaveYoloClassesFile();
+    }
+    
+    void ClearGeneratedFolders()
+    {
+        string baseDir = Path.Combine(Application.dataPath, "..", "SyntheticCreditCardData");
+        
+        // Clear main directory
+        if (Directory.Exists(baseDir))
+        {
+            try
+            {
+                Directory.Delete(baseDir, true);
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogWarning($"Could not clear folder: {e.Message}");
+            }
+        }
+        
+        // Recreate base directory
+        Directory.CreateDirectory(baseDir);
+        
+        // Create YOLO directory structure
+        if (saveYoloData)
+        {
+            string yoloDir = Path.Combine(baseDir, "yolo");
+            Directory.CreateDirectory(yoloDir);
+            
+            // Create split directories
+            string[] splits = { "train", "valid", "test" };
+            foreach (string split in splits)
+            {
+                string splitDir = Path.Combine(yoloDir, split);
+                Directory.CreateDirectory(splitDir);
+                Directory.CreateDirectory(Path.Combine(splitDir, "images"));
+                Directory.CreateDirectory(Path.Combine(splitDir, "labels"));
+            }
+        }
     }
     
     void Update()
@@ -191,28 +258,29 @@ public class Synthesize : MonoBehaviour
         LoadCardFontsFromFolder(cardFontsFolder);
         
         // Load signature
-        LoadSignature();
+        LoadAdditionalTextures();
     }
     
-    void LoadSignature()
+    void LoadAdditionalTextures()
     {
+        // Load signature texture
         string signaturePath = "Assets/signature.png";
-        signatureTexture = AssetDatabase.LoadAssetAtPath<Texture2D>(signaturePath);
+        signatureTexture = LoadTextureFromFile(signaturePath);
+        
         if (signatureTexture != null)
         {
-            // Create a readable copy if needed
-            if (!signatureTexture.isReadable)
-            {
-                signatureTexture = CreateReadableTextureCopy(signatureTexture);
-            }
-            
-            // Set texture properties
             signatureTexture.filterMode = FilterMode.Bilinear;
             signatureTexture.wrapMode = TextureWrapMode.Clamp;
         }
-        else
+        
+        // Load RFID texture
+        string rfidPath = "Assets/rfid.png";
+        rfidTexture = LoadTextureFromFile(rfidPath);
+        
+        if (rfidTexture != null)
         {
-            Debug.LogWarning("Signature texture not found at: " + signaturePath);
+            rfidTexture.filterMode = FilterMode.Bilinear;
+            rfidTexture.wrapMode = TextureWrapMode.Clamp;
         }
     }
     
@@ -341,61 +409,79 @@ public class Synthesize : MonoBehaviour
     
     void CreateFontAssetsFromRawFiles(string folderPath)
     {
+        if (!Directory.Exists(folderPath))
+        {
+            Debug.LogWarning($"Font folder does not exist: {folderPath}");
+            return;
+        }
+
         string[] ttfFiles = Directory.GetFiles(folderPath, "*.ttf");
         string[] otfFiles = Directory.GetFiles(folderPath, "*.otf");
         string[] allFontFiles = ttfFiles.Concat(otfFiles).ToArray();
-        
+
         foreach (string fontFile in allFontFiles)
         {
             string fileName = Path.GetFileNameWithoutExtension(fontFile);
             string assetPath = Path.Combine(folderPath, fileName + ".asset");
-            
+
+            // Always regenerate the font asset to ensure atlas texture is created
             if (File.Exists(assetPath))
             {
-                TMPro.TMP_FontAsset existingAsset = AssetDatabase.LoadAssetAtPath<TMPro.TMP_FontAsset>(assetPath);
-                if (existingAsset != null && existingAsset.atlasTexture != null)
-                {
-                    continue;
-                }
-                else
-                {
-                    AssetDatabase.DeleteAsset(assetPath);
-                }
+                AssetDatabase.DeleteAsset(assetPath);
             }
-            
+
             try
             {
-                Font font = AssetDatabase.LoadAssetAtPath<Font>(fontFile);
+                // Load the font file
+                Font font = new Font(fontFile);
                 if (font == null)
                 {
-                    Debug.LogWarning($"Could not load font file: {fontFile}");
+                    Debug.LogError($"Failed to load font: {fontFile}");
                     continue;
                 }
-                
-                TMPro.TMP_FontAsset tmpFontAsset = TMPro.TMP_FontAsset.CreateFontAsset(font, 90, 9, UnityEngine.TextCore.LowLevel.GlyphRenderMode.SDFAA, 1024, 1024, TMPro.AtlasPopulationMode.Dynamic);
+
+                // Create TMP Font Asset with proper settings
+                TMPro.TMP_FontAsset tmpFontAsset = TMPro.TMP_FontAsset.CreateFontAsset(
+                    font, 90, 9, UnityEngine.TextCore.LowLevel.GlyphRenderMode.SDFAA, 1024, 1024, TMPro.AtlasPopulationMode.Dynamic);
+
                 if (tmpFontAsset != null)
                 {
+                    // Set the correct URP Lit shader for the font asset's material
+                    Shader urpLitShader = Shader.Find("TextMeshPro/SRP/TMP_SDF-URP Lit");
+                    if (urpLitShader != null)
+                    {
+                        tmpFontAsset.material.shader = urpLitShader;
+                    }
+                    else
+                    {
+                        Debug.LogWarning("Could not find shader: TextMeshPro/SRP/TMP_SDF-URP Lit. Font asset will use default shader.");
+                    }
+
+                    // Validate that the atlas texture was created
                     if (tmpFontAsset.atlasTexture == null)
                     {
-                        Debug.LogWarning($"Atlas texture not generated for: {fileName}, skipping");
-                        DestroyImmediate(tmpFontAsset);
+                        Debug.LogError($"Font asset created but atlas texture is null for: {fileName}");
                         continue;
                     }
-                    
+
+                    // Save the font asset
                     AssetDatabase.CreateAsset(tmpFontAsset, assetPath);
                     AssetDatabase.SaveAssets();
                     AssetDatabase.Refresh();
                 }
                 else
                 {
-                    Debug.LogWarning($"Failed to create TMP_FontAsset for: {fontFile}");
+                    Debug.LogError($"Failed to create TMP Font Asset for: {fontFile}");
                 }
             }
             catch (System.Exception e)
             {
-                Debug.LogError($"Error creating TMP_FontAsset for {fontFile}: {e.Message}");
+                Debug.LogError($"Error creating font asset for {fontFile}: {e.Message}");
             }
         }
+
+        // Force refresh to ensure all assets are properly loaded
+        AssetDatabase.Refresh();
     }
     
     void SetupMagneticStripe()
@@ -408,7 +494,7 @@ public class Synthesize : MonoBehaviour
         if (mainCamera == null) return;
         
         // Set camera to render texture
-        // mainCamera.targetTexture = renderTexture;
+        mainCamera.targetTexture = renderTexture;
         
         // Built-in Render Pipeline camera settings
         mainCamera.clearFlags = CameraClearFlags.Skybox;
@@ -418,6 +504,50 @@ public class Synthesize : MonoBehaviour
         
         // Enable anti-aliasing for smoother edges
         mainCamera.allowMSAA = true;
+        
+        // Create a second camera for screen rendering
+        CreateScreenCamera();
+    }
+    
+    void CreateScreenCamera()
+    {
+        // Create a second camera for screen rendering
+        GameObject screenCameraObj = new GameObject("ScreenCamera");
+        Camera screenCamera = screenCameraObj.AddComponent<Camera>();
+
+        var urpCam = screenCamera.GetComponent<UniversalAdditionalCameraData>();
+        if (urpCam == null) urpCam = screenCamera.gameObject.AddComponent<UniversalAdditionalCameraData>();
+        urpCam.renderPostProcessing = true;
+        // Enable a post-process AA (matches the "Anti-aliasing" dropdown on the Camera)
+        urpCam.antialiasing = AntialiasingMode.SubpixelMorphologicalAntiAliasing; // or FastApproximateAntialiasing
+        urpCam.antialiasingQuality = AntialiasingQuality.High;    
+
+        
+        // Copy settings from main camera
+        screenCamera.clearFlags = mainCamera.clearFlags;
+        screenCamera.farClipPlane = mainCamera.farClipPlane;
+        screenCamera.nearClipPlane = mainCamera.nearClipPlane;
+        screenCamera.fieldOfView = mainCamera.fieldOfView;
+        screenCamera.allowMSAA = true;
+        
+        
+        
+        
+        // Position it at the same location as main camera
+        screenCamera.transform.position = mainCamera.transform.position;
+        screenCamera.transform.rotation = mainCamera.transform.rotation;
+        
+        // Set it to render to screen (no target texture)
+        screenCamera.targetTexture = null;
+        
+        // Set render order - main camera renders first, screen camera renders second
+        screenCamera.depth = mainCamera.depth + 1;
+        
+        // Make it a child of the main camera so it follows
+        screenCameraObj.transform.SetParent(mainCamera.transform);
+        
+        // Store reference to screen camera
+        this.screenCamera = screenCamera;
     }
     
     void SetupRenderTexture()
@@ -487,7 +617,7 @@ public class Synthesize : MonoBehaviour
     {
         if (cardModel == null) return;
         
-        bool isCardBack = Random.Range(0f, 1f) < 0.5f;
+        isCardBack = Random.Range(0f, 1f) < 0.5f;
         
         // Remove blend mode selection
         // SelectRandomBlendModeForGeneration();
@@ -495,14 +625,16 @@ public class Synthesize : MonoBehaviour
         // Randomize card position and rotation
         RandomizeCardTransform();
         
+        Color randomColor = new Color(Random.Range(0.0f, 1.0f), Random.Range(0.0f, 1.0f), Random.Range(0.0f, 1.0f));
+        
         // Randomize text setup position and content
-        RandomizeTextSetup(isCardBack);
+        RandomizeTextSetup(isCardBack, randomColor);
         
         // Apply random skybox with delay
         StartCoroutine(ApplySkyboxWithDelay());
         
         // Apply random materials with superimposed logos
-        ApplyRandomMaterialsWithLogos(isCardBack);
+        ApplyRandomMaterialsWithLogos(isCardBack, randomColor);
         
     }
     
@@ -539,11 +671,9 @@ public class Synthesize : MonoBehaviour
         
         // Additional small delay to ensure environment map is properly set
         yield return new WaitForSeconds(0.1f);
-        
-        Debug.Log("Skybox applied with delay, environment map should be updated");
     }
     
-    void RandomizeTextSetup(bool isCardBack)
+    void RandomizeTextSetup(bool isCardBack, Color cardBlendColor)
     {
         if (textSetup == null) return;
         
@@ -597,10 +727,19 @@ public class Synthesize : MonoBehaviour
             randomFont = cardFonts[Random.Range(0, cardFonts.Count)];
         }
 
-        // Generate random color
-        Color randomColor = GenerateRandomTextColor();
         
-        randomColor = GenerateChromeReflectionColor(randomColor);
+        // Generate a color that contrasts well with cardBlendColor
+        // Color.RGBToHSV(cardBlendColor, out float h, out float s, out float v);
+        // // Flip the hue by 180 degrees (0.5 in HSV), invert value for strong contrast
+        // float contrastHue = (h + 0.1f) % 1.0f;
+        // float contrastS = 1.0f;
+        // float contrastV = v > 0.8f ? 0.1f : 1.0f; // invert brightness for contrast
+        Color randomColor = Color.HSVToRGB(Random.Range(0f,1f), Random.Range(0.8f,1f), Random.Range(0.8f,1f));
+
+        if (Random.Range(0f, 1f) < 0.15f) {
+            randomColor = Color.white;
+        }
+        
 
 
        
@@ -622,7 +761,7 @@ public class Synthesize : MonoBehaviour
                     }
 
                     // Apply text color and chrome effects
-                    ApplyTextEffects(textMesh, textColor);
+                    ApplyTextEffects(textMesh, new Color(textColor.r, textColor.g, textColor.b, 1.0f));
 
                     // Always assign text content regardless of front/back design
                     switch (childName)
@@ -758,7 +897,7 @@ public class Synthesize : MonoBehaviour
         );
         
         // Apply random rotation on top of camera-facing rotation
-        cardTransform.rotation *= Quaternion.Euler(randomRotation);
+        cardTransform.rotation = Quaternion.Euler(randomRotation);
     }
     
     void ApplyRandomSkybox()
@@ -789,7 +928,7 @@ public class Synthesize : MonoBehaviour
                 // Built-in Render Pipeline approach
                 RenderSettings.defaultReflectionMode = UnityEngine.Rendering.DefaultReflectionMode.Custom;
                 RenderSettings.customReflectionTexture = randomSkyboxCubemap;
-                RenderSettings.reflectionIntensity = Random.Range(1.0f, 3.0f);
+                RenderSettings.reflectionIntensity = Random.Range(0.5f, 2.0f);
             }
             catch (System.Exception reflectionError) 
             {
@@ -812,8 +951,6 @@ public class Synthesize : MonoBehaviour
             {
                 Debug.LogWarning($"URP reflection setup failed: {urpError.Message}");
             }
-            
-            Debug.Log($"Applied skybox with rotation: {rotation}, cubemap: {randomSkyboxCubemap.name}");
         }
         catch (System.Exception e)
         {
@@ -821,7 +958,7 @@ public class Synthesize : MonoBehaviour
         }
     }
     
-    void ApplyRandomMaterialsWithLogos(bool isCardBack)
+    void ApplyRandomMaterialsWithLogos(bool isCardBack, Color randomColor)
     {
         if (frontMaterial == null) 
         {
@@ -833,11 +970,10 @@ public class Synthesize : MonoBehaviour
         {
             Texture2D randomFrontTexture = frontTextures[Random.Range(0, frontTextures.Count)];
             
-            Color randomColor = cardColors[Random.Range(0, cardColors.Count)];
+            
             float blendAmount = Random.Range(minColorBlend, maxColorBlend);
             if (isCardBack) {
                 blendAmount = 1.0f;
-                randomColor *= 0.5f;
             }
             Texture2D blendedTexture = BlendTextureWithColor(randomFrontTexture, randomColor, blendAmount);
             
@@ -846,16 +982,17 @@ public class Synthesize : MonoBehaviour
             frontMaterial.mainTexture = finalTexture;
             
             // Set the background texture as the normal map for realistic surface detail
-            if (frontMaterial.HasProperty("_BumpMap"))
-            {
-                frontMaterial.SetTexture("_BumpMap", randomFrontTexture);
-                Debug.Log($"Set background texture as normal map: {randomFrontTexture.name}");
-            }
-            else if (frontMaterial.HasProperty("_NormalMap"))
-            {
-                frontMaterial.SetTexture("_NormalMap", randomFrontTexture);
-                Debug.Log($"Set background texture as normal map: {randomFrontTexture.name}");
-            }
+            // if (frontMaterial.HasProperty("_BumpMap"))
+            // {
+            //     Texture2D normalMap = ConvertToNormalMap(randomFrontTexture);
+            //     frontMaterial.SetTexture("_BumpMap", normalMap);
+            // }
+            // else if (frontMaterial.HasProperty("_NormalMap"))
+            // {
+            //     // Convert the texture to a normal map before assigning
+            //     Texture2D normalMap = ConvertToNormalMap(randomFrontTexture);
+            //     frontMaterial.SetTexture("_NormalMap", normalMap);
+            // }
             
             // Make the card background shiny
             MakeCardShiny(frontMaterial);
@@ -867,6 +1004,78 @@ public class Synthesize : MonoBehaviour
         {
             Debug.LogWarning("No front textures available!");
         }
+    }
+    
+    Texture2D ConvertToNormalMap(Texture2D sourceTexture)
+    {
+        // Create a readable copy if needed
+        if (!sourceTexture.isReadable)
+        {
+            sourceTexture = CreateReadableTextureCopy(sourceTexture);
+        }
+        
+        // Create normal map texture
+        Texture2D normalMap = new Texture2D(sourceTexture.width, sourceTexture.height, TextureFormat.RGBA32, false);
+        normalMap.filterMode = FilterMode.Bilinear;
+        normalMap.wrapMode = TextureWrapMode.Clamp;
+        
+        // Get source pixels
+        Color[] sourcePixels = sourceTexture.GetPixels();
+        Color[] normalPixels = new Color[sourcePixels.Length];
+        
+        // Convert height map to normal map
+        for (int y = 0; y < sourceTexture.height; y++)
+        {
+            for (int x = 0; x < sourceTexture.width; x++)
+            {
+                // Get current pixel and neighbors
+                float current = GetHeight(sourcePixels, x, y, sourceTexture.width, sourceTexture.height);
+                float right = GetHeight(sourcePixels, x + 1, y, sourceTexture.width, sourceTexture.height);
+                float left = GetHeight(sourcePixels, x - 1, y, sourceTexture.width, sourceTexture.height);
+                float up = GetHeight(sourcePixels, x, y + 1, sourceTexture.width, sourceTexture.height);
+                float down = GetHeight(sourcePixels, x, y - 1, sourceTexture.width, sourceTexture.height);
+                
+                // Calculate normal using Sobel filter
+                Vector3 normal = CalculateNormal(right, left, up, down, current);
+                
+                // Convert to normal map format (0.5 + normal * 0.5)
+                Color normalColor = new Color(
+                    0.5f + normal.x * 0.5f,
+                    0.5f + normal.y * 0.5f,
+                    0.5f + normal.z * 0.5f,
+                    1.0f
+                );
+                
+                normalPixels[y * sourceTexture.width + x] = normalColor;
+            }
+        }
+        
+        normalMap.SetPixels(normalPixels);
+        normalMap.Apply();
+        
+        return normalMap;
+    }
+    
+    float GetHeight(Color[] pixels, int x, int y, int width, int height)
+    {
+        // Handle edge cases
+        if (x < 0 || x >= width || y < 0 || y >= height)
+            return 0.5f;
+        
+        // Get grayscale height from RGB
+        Color pixel = pixels[y * width + x];
+        return (pixel.r + pixel.g + pixel.b) / 3.0f;
+    }
+    
+    Vector3 CalculateNormal(float right, float left, float up, float down, float center)
+    {
+        // Calculate gradients using Sobel filter
+        float dx = (right - left) * 2.0f;
+        float dy = (up - down) * 2.0f;
+        
+        // Create normal vector
+        Vector3 normal = new Vector3(-dx, -dy, 1.0f);
+        return normal.normalized;
     }
     
     void RefreshCardEnvironmentMap(Material cardMaterial)
@@ -893,8 +1102,6 @@ public class Synthesize : MonoBehaviour
                 
                 // Force material to update
                 cardMaterial.SetPass(0);
-                
-                Debug.Log($"Refreshed environment map on card material: {skyboxCubemap.name}");
             }
         }
     }
@@ -903,16 +1110,13 @@ public class Synthesize : MonoBehaviour
     {
         if (material == null) return;
         
-        Debug.Log($"Making card shiny. Material: {material.name}, Shader: {material.shader.name}");
-        
         // URP Lit specific properties for shiny, metallic, plasticky appearance
         
         // Very high smoothness for maximum reflectivity
         if (material.HasProperty("_Smoothness"))
         {
-            float smoothness = Random.Range(0.95f, 1.0f); // Increased from 0.85-0.95 to 0.95-1.0
+            float smoothness = Random.Range(0.95f, 1.0f);
             material.SetFloat("_Smoothness", smoothness);
-            Debug.Log($"Set _Smoothness to: {smoothness}");
         }
         else
         {
@@ -922,9 +1126,8 @@ public class Synthesize : MonoBehaviour
         // Higher metallic for stronger reflections
         if (material.HasProperty("_Metallic"))
         {
-            float metallic = Random.Range(0.0f, 1.0f); // Increased from 0.1-0.3 to 0.4-0.8
+            float metallic = Random.Range(0.0f, 1.0f);
             material.SetFloat("_Metallic", metallic);
-            Debug.Log($"Set _Metallic to: {metallic}");
         }
         else
         {
@@ -934,45 +1137,29 @@ public class Synthesize : MonoBehaviour
         // Normal map strength for subtle surface detail
         if (material.HasProperty("_BumpScale"))
         {
-            float bumpScale = Random.Range(0.5f, 0.9f); // Reduced for smoother reflections
+            float bumpScale = Random.Range(0.5f, 0.9f);
             material.SetFloat("_BumpScale", bumpScale);
-            Debug.Log($"Set _BumpScale to: {bumpScale}");
         }
         else
         {
             Debug.LogWarning("Material does not have _BumpScale property");
         }
         
-        // Emission for subtle glow (credit cards often have a slight glow)
-        // if (material.HasProperty("_EmissionColor"))
-        // {
-        //     Color emissionColor = Color.white * Random.Range(0.05f, 0.1f);
-        //     material.SetColor("_EmissionColor", emissionColor);
-        //     material.EnableKeyword("_EMISSION");
-        //     Debug.Log($"Set _EmissionColor to: {emissionColor}");
-        // }
-        // else
-        // {
-        //     Debug.LogWarning("Material does not have _EmissionColor property");
-        // }
-        
         // Ambient occlusion strength for better depth
-        // if (material.HasProperty("_OcclusionStrength"))
-        // {
-        //     float occlusionStrength = Random.Range(0.6f, 0.8f); // Back to previous value
-        //     material.SetFloat("_OcclusionStrength", occlusionStrength);
-        //     Debug.Log($"Set _OcclusionStrength to: {occlusionStrength}");
-        // }
-        // else
-        // {
-        //     Debug.LogWarning("Material does not have _OcclusionStrength property");
-        // }
+        if (material.HasProperty("_OcclusionStrength"))
+        {
+            // float occlusionStrength = Random.Range(0.6f, 0.8f);
+            // material.SetFloat("_OcclusionStrength", occlusionStrength);
+        }
+        else
+        {
+            Debug.LogWarning("Material does not have _OcclusionStrength property");
+        }
         
         // URP Lit specific - Specular highlights (crucial for reflections)
         if (material.HasProperty("_SpecularHighlights"))
         {
             material.EnableKeyword("_SPECULARHIGHLIGHTS_ON");
-            Debug.Log("Enabled _SPECULARHIGHLIGHTS_ON keyword");
         }
         else
         {
@@ -983,7 +1170,6 @@ public class Synthesize : MonoBehaviour
         if (material.HasProperty("_EnvironmentReflections"))
         {
             material.EnableKeyword("_ENVIRONMENTREFLECTIONS_ON");
-            Debug.Log("Enabled _ENVIRONMENTREFLECTIONS_ON keyword");
         }
         else
         {
@@ -993,15 +1179,13 @@ public class Synthesize : MonoBehaviour
         // Additional URP reflection properties
         if (material.HasProperty("_ReflectionProbeUsage"))
         {
-            material.SetFloat("_ReflectionProbeUsage", 1.0f); // Use reflection probes
-            Debug.Log("Set _ReflectionProbeUsage to 1.0");
+            material.SetFloat("_ReflectionProbeUsage", 1.0f);
         }
         
         // Ensure environment map is properly set
         if (material.HasProperty("_EnvironmentMap"))
         {
             // This will be set by the skybox setup
-            Debug.Log("Material has _EnvironmentMap property");
         }
         
         // Force material to refresh environment reflections
@@ -1017,7 +1201,6 @@ public class Synthesize : MonoBehaviour
                 if (skyboxCubemap != null)
                 {
                     material.SetTexture("_EnvironmentMap", skyboxCubemap);
-                    Debug.Log($"Set environment map directly on card material: {skyboxCubemap.name}");
                 }
             }
         }
@@ -1031,7 +1214,6 @@ public class Synthesize : MonoBehaviour
                 if (skyboxCubemap != null)
                 {
                     material.SetTexture("unity_SpecCube0", skyboxCubemap);
-                    Debug.Log($"Set unity_SpecCube0 on card material: {skyboxCubemap.name}");
                 }
             }
         }
@@ -1040,18 +1222,16 @@ public class Synthesize : MonoBehaviour
         material.renderQueue = 2000;
         
         // Ensure proper shader keywords for URP Lit
-        material.EnableKeyword("_RECEIVE_SHADOWS_ON");
-        material.EnableKeyword("_MAIN_LIGHT_SHADOWS");
-        material.EnableKeyword("_MAIN_LIGHT_SHADOWS_CASCADE");
+        // material.EnableKeyword("_RECEIVE_SHADOWS_ON");
+        // material.EnableKeyword("_MAIN_LIGHT_SHADOWS");
+        // material.EnableKeyword("_MAIN_LIGHT_SHADOWS_CASCADE");
         
-        // Additional URP keywords for better reflections
-        material.EnableKeyword("_ADDITIONAL_LIGHTS");
-        material.EnableKeyword("_ADDITIONAL_LIGHT_SHADOWS");
+        // // Additional URP keywords for better reflections
+        // material.EnableKeyword("_ADDITIONAL_LIGHTS");
+        // material.EnableKeyword("_ADDITIONAL_LIGHT_SHADOWS");
         
         // Force material to update
         material.SetPass(0);
-        
-        Debug.Log("Finished making card shiny with enhanced contrast and reflection support");
     }
     
     
@@ -1120,6 +1300,14 @@ public class Synthesize : MonoBehaviour
             if (signatureTexture != null)
             {
                 AddSignatureToTexture(result);
+            }
+     
+            // Add RFID if it's the back of the card
+            if (rfidTexture != null)
+            {
+                AddLogoToTexture(result, rfidTexture, new Vector2(0.7f, 0.0f), 0.15f, 1.0f);
+            } else {
+                Debug.LogWarning("rfid texture not found at: ");
             }
         }
         
@@ -1256,6 +1444,8 @@ public class Synthesize : MonoBehaviour
             (signatureCenter.y + 1f) * 0.5f
         );
 
+        textureCenter += new Vector2(Random.Range(-0.02f, 0.00f), Random.Range(-0.01f, 0.01f));
+
         int signatureWidth = 0;
         int signatureHeight = 0;
 
@@ -1289,36 +1479,298 @@ public class Synthesize : MonoBehaviour
     
     System.Collections.IEnumerator CaptureAndSave()
     {
-        // Wait for rendering to complete
         yield return new WaitForEndOfFrame();
         
-        // Set camera target texture
-        mainCamera.targetTexture = renderTexture;
-        
-        // Render the scene
-        mainCamera.Render(); 
-        
-        // Read pixels from render texture
+        // Capture the render texture
         RenderTexture.active = renderTexture;
-        captureTexture.ReadPixels(new Rect(0, 0, 1024, 1024), 0, 0);
+        captureTexture.ReadPixels(new Rect(0, 0, renderTexture.width, renderTexture.height), 0, 0);
         captureTexture.Apply();
         RenderTexture.active = null;
         
-        // Ensure the captured texture is sharp
-        captureTexture.filterMode = FilterMode.Bilinear;
-        captureTexture.wrapMode = TextureWrapMode.Clamp;
-        
-        // Save the image with maximum quality
-        string filename = $"credit_card_{currentImageCount:D4}.png";
-        string filepath = Path.Combine("SyntheticCreditCardData", filename);
-        
-        byte[] imageData = captureTexture.EncodeToPNG();
-        File.WriteAllBytes(filepath, imageData);
+        // Generate filename
+        string filename = $"credit_card_{currentImageCount:D6}.jpg";
+
+        // If YOLO data saving is enabled, determine split and write image directly to YOLO images directory
+        if (saveYoloData)
+        {
+            string split = DetermineDataSplit();
+            string yoloDir = Path.Combine(Application.dataPath, "..", "SyntheticCreditCardData", "yolo", split);
+            string imagesDir = Path.Combine(yoloDir, "images");
+            Directory.CreateDirectory(imagesDir);
+            string destImagePath = Path.Combine(imagesDir, filename);
+
+            // Convert to JPG and save directly to YOLO images directory
+            byte[] imageData = captureTexture.EncodeToJPG(80);
+            File.WriteAllBytes(destImagePath, imageData);
+
+            // Save YOLO annotation
+            SaveYoloAnnotation(filename, currentImageCount, split, yoloDir, imagesDir);
+        }
+        else
+        {
+            // If not saving YOLO data, save to the parent folder as before
+            string filepath = Path.Combine(Application.dataPath, "..", "SyntheticCreditCardData", filename);
+            Directory.CreateDirectory(Path.GetDirectoryName(filepath));
+            byte[] imageData = captureTexture.EncodeToJPG(80);
+            File.WriteAllBytes(filepath, imageData);
+        }
         
         currentImageCount++;
+        totalImagesGenerated++;
         
         // Generate next card
         GenerateNextCard();
+    }
+    
+    void SaveYoloAnnotation(string imageFilename, int imageIndex, string split = null, string yoloDir = null, string imagesDir = null)
+    {
+        // If split/yoloDir/imagesDir are not provided, determine them (for backward compatibility)
+        if (string.IsNullOrEmpty(split))
+            split = DetermineDataSplit();
+        if (string.IsNullOrEmpty(yoloDir))
+            yoloDir = Path.Combine(Application.dataPath, "..", "SyntheticCreditCardData", "yolo", split);
+        if (string.IsNullOrEmpty(imagesDir))
+            imagesDir = Path.Combine(yoloDir, "images");
+
+        // Create YOLO annotation filename
+        string annotationFilename = Path.ChangeExtension(imageFilename, ".txt");
+        string labelsDir = Path.Combine(yoloDir, "labels");
+        string annotationPath = Path.Combine(labelsDir, annotationFilename);
+        
+        // Ensure directories exist
+        Directory.CreateDirectory(imagesDir);
+        Directory.CreateDirectory(labelsDir);
+        
+        // Generate YOLO annotations
+        List<string> yoloAnnotations = GenerateYoloAnnotations();
+        
+        // Write annotations to file
+        File.WriteAllLines(annotationPath, yoloAnnotations);
+
+        // No need to copy image, as it is already written directly to the YOLO images directory
+    }
+    
+    string DetermineDataSplit()
+    {
+        float randomValue = Random.Range(0f, 1f);
+        
+        if (randomValue < trainSplit)
+            return "train";
+        else if (randomValue < trainSplit + validSplit)
+            return "valid";
+        else
+            return "test";
+    }
+
+    public Bounds GetTextBounds(TextMeshPro tmp)
+    {
+        tmp.ForceMeshUpdate(); // make sure the mesh is up to date
+        TMP_TextInfo textInfo = tmp.textInfo;
+
+        if (textInfo.characterCount == 0)
+            return new Bounds(Vector3.zero, Vector3.zero);
+
+        Vector3 min = new Vector3(float.MaxValue, float.MaxValue, float.MaxValue);
+        Vector3 max = new Vector3(float.MinValue, float.MinValue, float.MinValue);
+
+        for (int i = 0; i < textInfo.characterCount; i++)
+        {
+            TMP_CharacterInfo charInfo = textInfo.characterInfo[i];
+            if (!charInfo.isVisible)
+                continue;
+
+            Vector3 bl = charInfo.bottomLeft;
+            Vector3 tr = charInfo.topRight;
+
+            min = Vector3.Min(min, bl);
+            max = Vector3.Max(max, tr);
+        }
+
+        Bounds bounds = new Bounds();
+        bounds.SetMinMax(min, max);
+        return bounds;
+    }
+    
+    List<string> GenerateYoloAnnotations()
+    {
+        List<string> annotations = new List<string>();
+        
+        // Get card dimensions in pixels
+        int imageWidth = renderTexture.width;
+        int imageHeight = renderTexture.height;
+        
+        // Add card bounding box (Front or Back)
+        string cardClass = isCardBack ? "Back" : "Front";
+        Vector4 cardBbox = CalculateCardBoundingBox(imageWidth, imageHeight);
+        annotations.Add($"{yoloClasses[cardClass]} {cardBbox.x:F6} {cardBbox.y:F6} {cardBbox.z:F6} {cardBbox.w:F6}");
+        
+        // Add text element bounding boxes - search recursively
+        if (textSetup != null)
+        {
+            FindAndAnnotateTextElements(textSetup.transform, annotations, imageWidth, imageHeight);
+        }
+        
+        return annotations;
+    }
+    
+    void FindAndAnnotateTextElements(Transform parent, List<string> annotations, int imageWidth, int imageHeight)
+    {
+        // Check all children recursively
+        for (int i = 0; i < parent.childCount; i++)
+        {
+            Transform child = parent.GetChild(i);
+            
+            // Check if this child has a TextMeshPro component
+            TMPro.TextMeshPro textMesh = child.GetComponent<TMPro.TextMeshPro>();
+            if (textMesh != null)
+            {
+                string childName = child.name;
+                if (yoloClasses.ContainsKey(childName))
+                {
+                    Vector4 textBbox = CalculateTextBoundingBoxTight(textMesh, imageWidth, imageHeight);
+                    
+                    if (textBbox.z > 0 && textBbox.w > 0) // Only add if bounding box has size
+                    {
+                        annotations.Add($"{yoloClasses[childName]} {textBbox.x:F6} {textBbox.y:F6} {textBbox.z:F6} {textBbox.w:F6}");
+                    }
+                }
+            }
+            
+            // Recursively search children of this child
+            FindAndAnnotateTextElements(child, annotations, imageWidth, imageHeight);
+        }
+    }
+    
+    Vector4 CalculateTextBoundingBoxTight(TMPro.TextMeshPro textMesh, int imageWidth, int imageHeight)
+    {
+        if (textMesh == null || string.IsNullOrEmpty(textMesh.text)) 
+            return Vector4.zero;
+        
+        // Get tight bounds using the GetTextBounds function
+        Bounds textBounds = GetTextBounds(textMesh);
+        
+        if (textBounds.size == Vector3.zero)
+            return Vector4.zero;
+        
+        // Convert world bounds to screen coordinates (2D card, use 4 corners with z values)
+        Vector3[] corners = new Vector3[4];
+        corners[0] = new Vector3(textBounds.min.x, textBounds.min.y, textBounds.min.z); // Bottom-left
+        corners[1] = new Vector3(textBounds.max.x, textBounds.min.y, textBounds.min.z); // Bottom-right
+        corners[2] = new Vector3(textBounds.min.x, textBounds.max.y, textBounds.max.z); // Top-left
+        corners[3] = new Vector3(textBounds.max.x, textBounds.max.y, textBounds.max.z); // Top-right
+        
+        // Convert all corners to screen space
+        Vector2 minScreen = new Vector2(float.MaxValue, float.MaxValue);
+        Vector2 maxScreen = new Vector2(float.MinValue, float.MinValue);
+        
+        for (int i = 0; i < 4; i++)
+        {
+            // Convert from local space to world space using text mesh transform
+            Vector3 worldCorner = textMesh.transform.TransformPoint(corners[i]);
+            Vector3 screenPos = mainCamera.WorldToScreenPoint(worldCorner);
+            minScreen.x = Mathf.Min(minScreen.x, screenPos.x);
+            minScreen.y = Mathf.Min(minScreen.y, screenPos.y);
+            maxScreen.x = Mathf.Max(maxScreen.x, screenPos.x);
+            maxScreen.y = Mathf.Max(maxScreen.y, screenPos.y);
+        }
+
+        
+        // Convert to normalized coordinates (0-1)
+        float centerX = (minScreen.x + maxScreen.x) / 2f / imageWidth;
+        float centerY = 1.0f - ((minScreen.y + maxScreen.y) / 2f / imageHeight); // YOLO uses top-left origin
+        float width = (maxScreen.x - minScreen.x) / imageWidth;
+        float height = (maxScreen.y - minScreen.y) / imageHeight;
+        
+        // Ensure bounding box is within image bounds
+        centerX = Mathf.Clamp(centerX, width/2, 1.0f - width/2);
+        centerY = Mathf.Clamp(centerY, height/2, 1.0f - height/2);
+        
+        return new Vector4(centerX, centerY, width, height);
+    }
+    
+    Vector4 CalculateCardBoundingBox(int imageWidth, int imageHeight)
+    {
+        // Use specific local coordinates for card corners
+        Vector3[] cardCorners = new Vector3[4];
+        cardCorners[0] = new Vector3(-0.0115f, -0.0076f, 0f); // Bottom-left
+        cardCorners[1] = new Vector3(0.0125f, -0.0076f, 0f);  // Bottom-right
+        cardCorners[2] = new Vector3(-0.0115f, 0.0076f, 0f);  // Top-left
+        cardCorners[3] = new Vector3(0.0125f, 0.0076f, 0f);   // Top-right
+        
+        // Transform corners to world space using card model transform
+        Vector2 minScreen = new Vector2(float.MaxValue, float.MaxValue);
+        Vector2 maxScreen = new Vector2(float.MinValue, float.MinValue);
+        
+        for (int i = 0; i < 4; i++)
+        {
+            // Transform from local to world space
+            Vector3 worldCorner = cardModel.transform.TransformPoint(cardCorners[i]);
+            
+            // Convert to screen space
+            Vector3 screenPos = mainCamera.WorldToScreenPoint(worldCorner);
+            if (screenPos.z > 0) // Only consider points in front of camera
+            {
+                minScreen.x = Mathf.Min(minScreen.x, screenPos.x);
+                minScreen.y = Mathf.Min(minScreen.y, screenPos.y);
+                maxScreen.x = Mathf.Max(maxScreen.x, screenPos.x);
+                maxScreen.y = Mathf.Max(maxScreen.y, screenPos.y);
+            }
+        }
+        
+        // Convert to normalized coordinates (0-1)
+        float centerX = (minScreen.x + maxScreen.x) / 2f / imageWidth;
+        float centerY = 1.0f - ((minScreen.y + maxScreen.y) / 2f / imageHeight); // YOLO uses top-left origin
+        float width = (maxScreen.x - minScreen.x) / imageWidth;
+        float height = (maxScreen.y - minScreen.y) / imageHeight;
+        
+        // Ensure bounding box is within image bounds
+        centerX = Mathf.Clamp(centerX, width/2, 1.0f - width/2);
+        centerY = Mathf.Clamp(centerY, height/2, 1.0f - height/2);
+        
+        return new Vector4(centerX, centerY, width, height);
+    }
+    
+    void SaveYoloClassesFile()
+    {
+        string yoloDir = Path.Combine(Application.dataPath, "..", "SyntheticCreditCardData", "yolo");
+        Directory.CreateDirectory(yoloDir);
+        
+        string classesPath = Path.Combine(yoloDir, "classes.txt");
+        List<string> classNames = new List<string>();
+        
+        foreach (var kvp in yoloClasses.OrderBy(x => x.Value))
+        {
+            classNames.Add(kvp.Key);
+        }
+        
+        File.WriteAllLines(classesPath, classNames);
+        
+        // Also create a data.yaml file for YOLO training
+        CreateYoloDataYaml();
+    }
+    
+    void CreateYoloDataYaml()
+    {
+        string yoloDir = Path.Combine(Application.dataPath, "..", "SyntheticCreditCardData", "yolo");
+        string dataYamlPath = Path.Combine(yoloDir, "data.yaml");
+        
+        List<string> yamlContent = new List<string>();
+        yamlContent.Add("# YOLO dataset configuration");
+        yamlContent.Add($"path: {yoloDir}");
+        yamlContent.Add("train: train/images");
+        yamlContent.Add("val: valid/images");
+        yamlContent.Add("test: test/images");
+        yamlContent.Add("");
+        yamlContent.Add("# Classes");
+        yamlContent.Add($"nc: {yoloClasses.Count}");
+        yamlContent.Add("names:");
+        
+        foreach (var kvp in yoloClasses.OrderBy(x => x.Value))
+        {
+            yamlContent.Add($"  {kvp.Value}: {kvp.Key}");
+        }
+        
+        File.WriteAllLines(dataYamlPath, yamlContent);
     }
     
     void OnDestroy()
@@ -1441,304 +1893,179 @@ public class Synthesize : MonoBehaviour
         return new Vector2(normalizedX, normalizedY);
     }
 
-    Color GenerateRandomTextColor()
-    {
-        return textColorOptions[Random.Range(0, textColorOptions.Count)];
-    }
     
-    Color GenerateChromeReflectionColor(Color baseColor)
-    {
-        if (!useChromeReflection)
-        {
-            return baseColor;
-        }
-        
-        // Create chrome effect with metallic reflection
-        float reflection = Random.Range(0.5f, chromeReflectionIntensity);
-        float metallic = Random.Range(0.7f, 1.0f);
-        float saturation = Random.Range(1.0f, 1.5f);
-        
-        // Convert to HSV for better color manipulation
-        Color.RGBToHSV(baseColor, out float h, out float s, out float v);
-        
-        // Enhance saturation for metallic look
-        s = Mathf.Clamp01(s * saturation);
-        
-        // Add metallic brightness and reflection
-        v = Mathf.Clamp01(v + reflection * metallic);
-        
-        // Convert back to RGB
-        Color chromeColor = Color.HSVToRGB(h, s, v);
-        
-        // Add metallic tint based on reflection angle
-        float tintStrength = Random.Range(0.2f, 0.4f);
-        Color metallicTint = new Color(
-            Random.Range(0.9f, 1.1f), // Slight red variation
-            Random.Range(0.9f, 1.1f), // Slight green variation  
-            Random.Range(1.0f, 1.3f), // Enhanced blue for metallic look
-            1f
-        );
-        
-        // Apply metallic tint
-        chromeColor = new Color(
-            Mathf.Clamp01(chromeColor.r * metallicTint.r * (1f - tintStrength) + metallicTint.r * tintStrength),
-            Mathf.Clamp01(chromeColor.g * metallicTint.g * (1f - tintStrength) + metallicTint.g * tintStrength),
-            Mathf.Clamp01(chromeColor.b * metallicTint.b * (1f - tintStrength) + metallicTint.b * tintStrength),
-            chromeColor.a
-        );
-        
-        // Add final brightness boost for chrome effect
-        chromeColor = new Color(
-            Mathf.Clamp01(chromeColor.r * 1.2f),
-            Mathf.Clamp01(chromeColor.g * 1.2f),
-            Mathf.Clamp01(chromeColor.b * 1.3f), // Slightly more blue for metallic look
-            chromeColor.a
-        );
-        
-        return chromeColor;
-    }
+    
     
     void ApplyTextEffects(TMPro.TextMeshPro textMesh, Color textColor)
     {
         if (textMesh == null) return;
+
+        // Enhance text color for better contrast
         
-        // Apply chrome effect to the text color
-        Color chromeColor = GenerateChromeReflectionColor(textColor);
-        textMesh.color = chromeColor;
         
         // Apply gradient chrome effect
-        ApplyGradientChromeEffect(textMesh, chromeColor);
+        ApplyGradientChromeEffect(textMesh, textColor);
         
-        // Add metallic properties if the material supports them
-        if (textMesh.fontSharedMaterial.HasProperty("_Metallic"))
+        // Add TextMeshPro lighting bevel effects
+        ApplyTextMeshProLightingEffects(textMesh);
+        
+        // Add strong outline for better contrast
+        if (textMesh.fontSharedMaterial.HasProperty("_OutlineColor"))
         {
-            textMesh.fontSharedMaterial.SetFloat("_Metallic", Random.Range(0.7f, 1.0f));
+            Color outlineColor = Color.black;
+            textMesh.fontSharedMaterial.SetColor("_OutlineColor", outlineColor);
+            textMesh.fontSharedMaterial.SetFloat("_OutlineWidth", Random.Range(0.02f, 0.04f));
         }
         
-        if (textMesh.fontSharedMaterial.HasProperty("_Smoothness"))
+        // Add shadow for depth
+        if (textMesh.fontSharedMaterial.HasProperty("_UnderlayColor"))
         {
-            textMesh.fontSharedMaterial.SetFloat("_Smoothness", Random.Range(0.8f, 1.0f));
+            Color shadowColor = new Color(0f, 0f, 0f, 0.5f);
+            textMesh.fontSharedMaterial.SetColor("_UnderlayColor", shadowColor);
+            textMesh.fontSharedMaterial.SetFloat("_UnderlayOffsetX", Random.Range(0.001f, 0.003f));
+            textMesh.fontSharedMaterial.SetFloat("_UnderlayOffsetY", Random.Range(-0.003f, -0.001f));
+            textMesh.fontSharedMaterial.SetFloat("_UnderlayDilate", Random.Range(0.5f, 1.0f));
         }
         
-        // Try to enable glow effect if supported
-        if (textMesh.fontSharedMaterial.HasProperty("_GlowPower"))
-        {
-            textMesh.fontSharedMaterial.SetFloat("_GlowPower", Random.Range(0.1f, 0.3f));
-        }
-        
-        if (textMesh.fontSharedMaterial.HasProperty("_GlowColor"))
-        {
-            textMesh.fontSharedMaterial.SetColor("_GlowColor", chromeColor * 0.5f);
-        }
-        
-        // Add embossing effects to text
-        ApplyEmbossedTextEffect(textMesh, textColor);
-        
-        // Add environment reflection support to text material
-        AddEnvironmentReflectionsToText(textMesh);
+        // Force text mesh to update without triggering material property errors
+        textMesh.ForceMeshUpdate();
     }
     
-    void ApplyEmbossedTextEffect(TMPro.TextMeshPro textMesh, Color textColor)
+    void ApplyTextMeshProLightingEffects(TMPro.TextMeshPro textMesh)
     {
         if (textMesh.fontSharedMaterial == null) return;
         
         Material textMaterial = textMesh.fontSharedMaterial;
         
-        // Enable outline for embossed effect
-        if (textMaterial.HasProperty("_OutlineColor"))
+        // Apply lighting bevel effects with safety checks
+        if (textMaterial.HasProperty("_LightingBevel"))
         {
-            // Create embossed outline color (darker version of text color)
-            Color embossColor = textColor * 0.3f; // Darker outline
-            textMaterial.SetColor("_OutlineColor", embossColor);
-            
-            // Set outline width for embossed appearance
-            if (textMaterial.HasProperty("_OutlineWidth"))
-            {
-                float outlineWidth = Random.Range(0.02f, 0.05f);
-                textMaterial.SetFloat("_OutlineWidth", outlineWidth);
-            }
-            
-            // Enable outline
-            textMaterial.EnableKeyword("_OUTLINE_ON");
+            textMaterial.SetFloat("_LightingBevel", 1.0f);
         }
         
-        // Add shadow for depth effect
-        if (textMaterial.HasProperty("_ShadowColor"))
+        if (textMaterial.HasProperty("_LightAngle"))
         {
-            // Create shadow color (very dark version of text color)
-            Color shadowColor = textColor * 0.1f;
-            shadowColor.a = 0.8f; // Semi-transparent shadow
-            textMaterial.SetColor("_ShadowColor", shadowColor);
-            
-            // Set shadow offset for embossed depth
-            if (textMaterial.HasProperty("_ShadowOffset"))
-            {
-                Vector2 shadowOffset = new Vector2(
-                    Random.Range(0.01f, 0.03f),
-                    Random.Range(-0.03f, -0.01f) // Negative Y for shadow below
-                );
-                textMaterial.SetVector("_ShadowOffset", shadowOffset);
-            }
-            
-            // Enable shadow
-            textMaterial.EnableKeyword("_SHADOW_ON");
+            float lightAngle = Random.Range(0f, 6.28f);
+            textMaterial.SetFloat("_LightAngle", lightAngle);
         }
         
-        // Add depth effect through face color variation
-        if (textMaterial.HasProperty("_FaceColor"))
+        if (textMaterial.HasProperty("_Reflectivity"))
         {
-            // Slightly lighter face color for embossed effect
-            Color faceColor = textColor * 1.2f;
-            faceColor.a = textColor.a;
-            textMaterial.SetColor("_FaceColor", faceColor);
-        }
-        else if (textMaterial.HasProperty("_BaseColor"))
-        {
-            // URP TextMeshPro uses _BaseColor
-            Color baseColor = textColor * 1.2f;
-            baseColor.a = textColor.a;
-            textMaterial.SetColor("_BaseColor", baseColor);
+            float reflectivityPower = Random.Range(5.0f, 15.0f);
+            textMaterial.SetFloat("_Reflectivity", reflectivityPower);
         }
         
-        // Add subtle glow for embossed highlight
-        if (textMaterial.HasProperty("_GlowPower") && !textMaterial.HasProperty("_GlowColor"))
+        // Set bevel amount
+        if (textMaterial.HasProperty("_BevelAmount"))
         {
-            textMaterial.SetFloat("_GlowPower", Random.Range(0.05f, 0.15f));
+            float bevelAmount = Random.Range(0.0f, 0.3f);
+            textMaterial.SetFloat("_BevelAmount", bevelAmount);
+        }
+
+        if (textMaterial.HasProperty("_SpecularPower")) {
+            float specularPower = Random.Range(1.0f, 3.0f);
+            textMaterial.SetFloat("_SpecularPower", specularPower);
         }
         
-        if (textMaterial.HasProperty("_GlowColor") && !textMaterial.HasProperty("_GlowPower"))
+        // Set bevel width
+        if (textMaterial.HasProperty("_BevelWidth"))
         {
-            // Subtle glow color for embossed highlight
-            Color glowColor = textColor * 0.3f;
-            textMaterial.SetColor("_GlowColor", glowColor);
+            float bevelWidth = Random.Range(0.1f, 0.2f);
+            textMaterial.SetFloat("_BevelWidth", bevelWidth);
         }
         
-        Debug.Log($"Applied embossed text effect to: {textMesh.text}");
+        // Set bevel offset
+        if (textMaterial.HasProperty("_BevelOffset"))
+        {
+            float bevelOffset = Random.Range(0.0f, 0.1f);
+            textMaterial.SetFloat("_BevelOffset", bevelOffset);
+        }
+        
+        // Set bevel roundness
+        if (textMaterial.HasProperty("_BevelRoundness"))
+        {
+            float bevelRoundness = Random.Range(0.1f, 0.5f);
+            textMaterial.SetFloat("_BevelRoundness", bevelRoundness);
+        }
+        
+        // Set local lighting intensity
+        if (textMaterial.HasProperty("_LocalLightingIntensity"))
+        {
+            float localLightingIntensity = Random.Range(0.5f, 1.5f);
+            textMaterial.SetFloat("_LocalLightingIntensity", localLightingIntensity);
+        }
+        
+        // Set local lighting color
+        if (textMaterial.HasProperty("_LocalLightingColor"))
+        {
+            Color localLightingColor = new Color(
+                Random.Range(0.8f, 1.2f),
+                Random.Range(0.8f, 1.2f),
+                Random.Range(0.8f, 1.2f),
+                1.0f
+            );
+            textMaterial.SetColor("_LocalLightingColor", localLightingColor);
+        }
+        
+        // Set diffuse
+        if (textMaterial.HasProperty("_Diffuse"))
+        {
+            textMaterial.SetFloat("_Diffuse", Random.Range(0.0f, 0.1f));
+        }
+        
+        // Set underlay softness
+        // if (textMaterial.HasProperty("_UnderlaySoftness"))
+        // {
+        //     float underlaySoftness = Random.Range(0.1f, 0.3f);
+        //     textMaterial.SetFloat("_UnderlaySoftness", underlaySoftness);
+        // }
     }
     
-    void AddEnvironmentReflectionsToText(TMPro.TextMeshPro textMesh)
-    {
-        if (textMesh.fontSharedMaterial == null) return;
-        
-        Material textMaterial = textMesh.fontSharedMaterial;
-        
-        // Enable environment reflections for text
-        if (textMaterial.HasProperty("_EnvironmentReflections"))
-        {
-            textMaterial.EnableKeyword("_ENVIRONMENTREFLECTIONS_ON");
-            textMaterial.SetFloat("_EnvironmentReflections", 1.0f);
-        }
-        
-        // Enable specular highlights for text
-        if (textMaterial.HasProperty("_SpecularHighlights"))
-        {
-            textMaterial.EnableKeyword("_SPECULARHIGHLIGHTS_ON");
-        }
-        
-        // Set metallic properties for text to enable reflections
-        if (textMaterial.HasProperty("_Metallic"))
-        {
-            // Only set if not already set by chrome effects
-            if (!useChromeReflection)
-            {
-                textMaterial.SetFloat("_Metallic", Random.Range(0.3f, 0.6f));
-            }
-        }
-        
-        // Set smoothness for text to enable reflections
-        if (textMaterial.HasProperty("_Smoothness"))
-        {
-            // Only set if not already set by chrome effects
-            if (!useChromeReflection)
-            {
-                textMaterial.SetFloat("_Smoothness", Random.Range(0.6f, 0.9f));
-            }
-        }
-        
-        // Try to set environment map directly on text material
-        if (textMaterial.HasProperty("_EnvironmentMap"))
-        {
-            // Get the current skybox cubemap
-            if (RenderSettings.skybox != null && RenderSettings.skybox.HasProperty("_Tex"))
-            {
-                Cubemap skyboxCubemap = RenderSettings.skybox.GetTexture("_Tex") as Cubemap;
-                if (skyboxCubemap != null)
-                {
-                    textMaterial.SetTexture("_EnvironmentMap", skyboxCubemap);
-                }
-            }
-        }
-        
-        // Alternative environment map property names
-        if (textMaterial.HasProperty("unity_SpecCube0"))
-        {
-            if (RenderSettings.skybox != null && RenderSettings.skybox.HasProperty("_Tex"))
-            {
-                Cubemap skyboxCubemap = RenderSettings.skybox.GetTexture("_Tex") as Cubemap;
-                if (skyboxCubemap != null)
-                {
-                    textMaterial.SetTexture("unity_SpecCube0", skyboxCubemap);
-                }
-            }
-        }
-        
-        // Set reflection probe usage
-        if (textMaterial.HasProperty("_ReflectionProbeUsage"))
-        {
-            textMaterial.SetFloat("_ReflectionProbeUsage", 1.0f);
-        }
-        
-        // Enable additional URP keywords for text
-        textMaterial.EnableKeyword("_RECEIVE_SHADOWS_ON");
-        textMaterial.EnableKeyword("_MAIN_LIGHT_SHADOWS");
-        textMaterial.EnableKeyword("_MAIN_LIGHT_SHADOWS_CASCADE");
-        
-        // Additional URP keywords for better reflections
-        textMaterial.EnableKeyword("_ADDITIONAL_LIGHTS");
-        textMaterial.EnableKeyword("_ADDITIONAL_LIGHT_SHADOWS");
-        
-        // Force material to update
-        textMaterial.SetPass(0);
-        
-        Debug.Log($"Added environment reflections to text material: {textMaterial.name}");
-    }
+    
+    
+   
     
     void ApplyGradientChromeEffect(TMPro.TextMeshPro textMesh, Color baseColor)
     {
-        // Create a subtle gradient effect by varying the color slightly
-        // This simulates the way chrome reflects light differently across its surface
+        if (textMesh.fontSharedMaterial == null) return;
         
-        // Generate slight color variations for gradient effect
-        float variation = Random.Range(0.05f, 0.5f);
-        Color gradientColor1 = new Color(
-            Mathf.Clamp01(baseColor.r + variation),
-            Mathf.Clamp01(baseColor.g + variation),
-            Mathf.Clamp01(baseColor.b + variation),
-            baseColor.a
-        );
+        // Generate stronger color variations for better contrast
+        float variation = 0.1f;
+        Color gradientColor1 = baseColor * 1.5f; // Brighter main color
         
         Color gradientColor2 = new Color(
-            Mathf.Clamp01(baseColor.r - variation),
-            Mathf.Clamp01(baseColor.g - variation),
-            Mathf.Clamp01(baseColor.b - variation),
+            Mathf.Clamp01(baseColor.r - variation ),
+            Mathf.Clamp01(baseColor.g - variation ),
+            Mathf.Clamp01(baseColor.b - variation ),
             baseColor.a
         );
-        
+
         // Apply gradient effect through material properties - URP compatible
         if (textMesh.fontSharedMaterial.HasProperty("_FaceColor"))
         {
             textMesh.fontSharedMaterial.SetColor("_FaceColor", gradientColor1);
         }
-        else if (textMesh.fontSharedMaterial.HasProperty("_BaseColor"))
+        if (textMesh.fontSharedMaterial.HasProperty("_OutlineColor1"))
         {
-            // URP TextMeshPro uses _BaseColor instead of _FaceColor
-            textMesh.fontSharedMaterial.SetColor("_BaseColor", gradientColor1);
+            //textMesh.fontSharedMaterial.SetColor("_OutlineColor1", gradientColor2);
         }
         
-        if (textMesh.fontSharedMaterial.HasProperty("_OutlineColor"))
+        if (textMesh.fontSharedMaterial.HasProperty("_OutlineColor2"))
         {
-            textMesh.fontSharedMaterial.SetColor("_OutlineColor", gradientColor2);
-            textMesh.fontSharedMaterial.SetFloat("_OutlineWidth", Random.Range(0.01f, 0.03f));
+            textMesh.fontSharedMaterial.SetColor("_OutlineColor2", Color.black);
+        }
+
+        if (textMesh.fontSharedMaterial.HasProperty("_IsoPerimeter")) {
+            //float isoPerimeter = Random.Range(-1.0f, 0.0f);
+            textMesh.fontSharedMaterial.SetVector("_IsoPerimeter", new Vector4(0, -1f, -1f, -1f));
+        }
+
+        if (textMesh.fontSharedMaterial.HasProperty("_Softness")) {
+            textMesh.fontSharedMaterial.SetVector("_Softness", new Vector4(1.0f,0,0,0));
+        }
+
+        if (textMesh.fontSharedMaterial.HasProperty("_UnderlayDilate")) {
+            textMesh.fontSharedMaterial.SetFloat("_UnderlayDilate", -1);
         }
     }
 
@@ -1787,7 +2114,7 @@ public class Synthesize : MonoBehaviour
                     {
                         // For cubemap textures, we need to create a cubemap from the texture
                         // This is more complex and might require manual cubemap creation
-                        Debug.Log($"Found cubemap texture: {texture.name}, but manual conversion needed");
+                        //Debug.Log($"Found cubemap texture: {texture.name}, but manual conversion needed");
                     }
                 }
             }
@@ -1795,5 +2122,5 @@ public class Synthesize : MonoBehaviour
         
     }
 
-    
+
 }

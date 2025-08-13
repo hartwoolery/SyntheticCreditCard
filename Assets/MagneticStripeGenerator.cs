@@ -20,6 +20,10 @@ public class MagneticStripeGenerator
     public Color stripeHighlightColor = new Color(0.3f, 0.3f, 0.3f);
     public Color stripeShadowColor = new Color(0.05f, 0.05f, 0.05f);
     
+    // Color variation range for magnetic stripe
+    [Range(0.1f, 0.9f)] public float minStripeBrightness = 0.1f; // Dark black
+    [Range(0.1f, 0.9f)] public float maxStripeBrightness = 0.7f; // Light grey
+    
     [Header("Track Data")]
     public bool generateTrackData = true;
     [Range(0.1f, 0.5f)] public float trackDataOpacity = 0.3f;
@@ -57,20 +61,36 @@ public class MagneticStripeGenerator
     
     void GenerateBaseStripe(Texture2D texture, int startX, int startY, int width, int height)
     {
+        // Generate random color variation for this stripe
+        float randomBrightness = Random.Range(minStripeBrightness, maxStripeBrightness);
+        Color randomStripeColor = new Color(randomBrightness, randomBrightness, randomBrightness);
+        
+        // Create darker and lighter variations for gradient
+        Color darkVariation = new Color(
+            randomBrightness * 0.3f, 
+            randomBrightness * 0.3f, 
+            randomBrightness * 0.3f
+        );
+        Color lightVariation = new Color(
+            Mathf.Min(randomBrightness * 1.5f, 1.0f), 
+            Mathf.Min(randomBrightness * 1.5f, 1.0f), 
+            Mathf.Min(randomBrightness * 1.5f, 1.0f)
+        );
+        
         for (int x = startX; x < startX + width; x++)
         {
             for (int y = startY; y < startY + height; y++)
             {
-                // Base stripe color
-                Color baseColor = stripeBaseColor;
+                // Base stripe color with random variation
+                Color baseColor = randomStripeColor;
                 
                 // Add subtle gradient
                 float gradient = (float)(y - startY) / height;
-                baseColor = Color.Lerp(stripeShadowColor, stripeHighlightColor, gradient);
+                baseColor = Color.Lerp(darkVariation, lightVariation, gradient);
                 
                 // Add horizontal variation
                 float horizontalVar = Mathf.Sin((float)(x - startX) / width * Mathf.PI * 2f) * 0.1f;
-                baseColor = Color.Lerp(baseColor, stripeHighlightColor, horizontalVar);
+                baseColor = Color.Lerp(baseColor, lightVariation, horizontalVar);
                 
                 texture.SetPixel(x, y, baseColor);
             }
@@ -79,6 +99,15 @@ public class MagneticStripeGenerator
     
     void AddNoiseAndWear(Texture2D texture, int startX, int startY, int width, int height)
     {
+        // Get the base stripe color for this generation
+        float randomBrightness = Random.Range(minStripeBrightness, maxStripeBrightness);
+        Color randomStripeColor = new Color(randomBrightness, randomBrightness, randomBrightness);
+        Color darkVariation = new Color(
+            randomBrightness * 0.3f, 
+            randomBrightness * 0.3f, 
+            randomBrightness * 0.3f
+        );
+        
         for (int x = startX; x < startX + width; x++)
         {
             for (int y = startY; y < startY + height; y++)
@@ -90,7 +119,7 @@ public class MagneticStripeGenerator
                     (float)x / width * noiseScale,
                     (float)y / height * noiseScale
                 );
-                currentColor = Color.Lerp(currentColor, stripeShadowColor, noise * noiseIntensity);
+                currentColor = Color.Lerp(currentColor, darkVariation, noise * noiseIntensity);
                 
                 // Add horizontal scratches
                 if (Random.Range(0f, 1f) < scratchIntensity * 0.01f)
@@ -98,7 +127,7 @@ public class MagneticStripeGenerator
                     // Create horizontal scratch across full width
                     int scratchY = y;
                     int scratchHeight = Random.Range(1, 4); // 1-3 pixels tall
-                    Color scratchColor = stripeShadowColor;
+                    Color scratchColor = darkVariation;
                     
                     // Draw horizontal line across the full stripe width
                     for (int sx = startX; sx < startX + width; sx++)
@@ -119,7 +148,7 @@ public class MagneticStripeGenerator
                     (float)x / width * 5f,
                     (float)y / height * 5f
                 );
-                currentColor = Color.Lerp(currentColor, stripeShadowColor, wear * wearIntensity);
+                currentColor = Color.Lerp(currentColor, darkVariation, wear * wearIntensity);
                 
                 texture.SetPixel(x, y, currentColor);
             }
